@@ -1,0 +1,1 @@
+﻿.\Invoke-PreflightChecks.ps1 -ConfigPath .\config_modified.json -OutFolder .\PreflightOutput

@@ -1,0 +1,44 @@
+
+# Invoke-PreflightChecks.ps1 Dokumentáció
+
+## Verzió
+v1.2-PS51 (Windows PowerShell 5.1 kompatibilis)
+
+## Cél
+Ez a szkript előellenőrzéseket végez Intune és Azure AD migrációhoz, beleértve:
+- Konfigurációs fájl betöltése
+- LDAP/DC környezet felderítése
+- TCP port elérhetőség tesztelése
+- Microsoft Graph tokenek lekérése
+- Intune MDM tanúsítvány és Autopilot regisztráció ellenőrzése
+- Rendszer újraindítási igény vizsgálata
+
+## Bemeneti paraméterek
+- `ConfigPath` (kötelező): A JSON formátumú konfigurációs fájl elérési útja.
+- `OutFolder` (opcionális): Az eredmények mentési mappája. Alapértelmezett: `./PreflightOutput`
+- `UseLdaps` (kapcsoló): Ha meg van adva, LDAPS (TCP 636) teszt is történik.
+
+## Főbb funkciók
+- `New-Result`: Eredmény objektum létrehozása név, státusz és részletek alapján.
+- `Get-LdapContext`: LDAP alap DN, domain FQDN és DC szerver felderítése.
+- DNS SRV rekord lekérdezés `_ldap._tcp.dc._msdcs` típusra.
+- TCP port tesztek:
+  - 443: `login.microsoftonline.com`, `graph.microsoft.com`
+  - 389: LDAP
+  - 636: LDAPS (ha `-UseLdaps` meg van adva)
+- Microsoft Graph token lekérése forrás és cél tenanthoz.
+- Intune MDM tanúsítvány keresése a gépen.
+- Autopilot regisztrációs kulcs ellenőrzése.
+- Függőben lévő újraindítás vizsgálata.
+
+## Kimeneti fájlok
+- `PreflightResults.json`: JSON formátumú eredmények
+- `PreflightResults.csv`: CSV formátumú eredmények
+
+## Hibakezelés
+- A szkript `SilentlyContinue` hibakezelést használ, így a hibák nem állítják meg a futást.
+- Minden ellenőrzés státusza: `OK`, `FAIL`, `WARN`, `INFO`, `PRESENT`, `ABSENT`, `YES`, `NO`
+- A végén összesítés jelenik meg: összes ellenőrzés száma és hibák száma.
+
+## Megjegyzés
+A szkript nem használ ternary operátort, így kompatibilis PowerShell 5.1 környezettel.
