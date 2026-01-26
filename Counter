@@ -1,0 +1,110 @@
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# Globális időzítők
+$global:seconds5min = 300
+$global:seconds1h = 3600
+
+# Képernyő pozíció
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$formWidth = 340
+$formHeight = 220
+$posX = $screen.Width - $formWidth - 20
+$posY = $screen.Height - $formHeight - 60
+
+# Form létrehozása
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Értesítés"
+$form.Size = New-Object System.Drawing.Size($formWidth, $formHeight)
+$form.StartPosition = "Manual"
+$form.Location = New-Object System.Drawing.Point($posX, $posY)
+$form.TopMost = $true
+$form.FormBorderStyle = 'FixedToolWindow'
+$form.ControlBox = $false
+
+# Címke
+$label = New-Object System.Windows.Forms.Label
+$label.Text = "Ez egy PowerShell értesítés két visszaszámlálóval:"
+$label.AutoSize = $true
+$label.Location = New-Object System.Drawing.Point(20,15)
+$form.Controls.Add($label)
+
+# Statikus: Újraindítás:
+$label5minPrefix = New-Object System.Windows.Forms.Label
+$label5minPrefix.Text = "Újraindítás:"
+$label5minPrefix.AutoSize = $true
+$label5minPrefix.Font = New-Object System.Drawing.Font("Segoe UI",12)
+$label5minPrefix.Location = New-Object System.Drawing.Point(20,50)
+$form.Controls.Add($label5minPrefix)
+
+# Dinamikus: idő
+$label5minTime = New-Object System.Windows.Forms.Label
+$label5minTime.Text = "05:00"
+$label5minTime.AutoSize = $true
+$label5minTime.Font = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)
+$label5minTime.Location = New-Object System.Drawing.Point(140,50)
+$form.Controls.Add($label5minTime)
+
+# Statikus: Leállás:
+$label1hPrefix = New-Object System.Windows.Forms.Label
+$label1hPrefix.Text = "Leállás:"
+$label1hPrefix.AutoSize = $true
+$label1hPrefix.Font = New-Object System.Drawing.Font("Segoe UI",12)
+$label1hPrefix.Location = New-Object System.Drawing.Point(20,85)
+$form.Controls.Add($label1hPrefix)
+
+# Dinamikus: idő
+$label1hTime = New-Object System.Windows.Forms.Label
+$label1hTime.Text = "01:00:00"
+$label1hTime.AutoSize = $true
+$label1hTime.Font = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)
+$label1hTime.Location = New-Object System.Drawing.Point(140,85)
+$form.Controls.Add($label1hTime)
+
+# Gomb: Rendben
+$okButton = New-Object System.Windows.Forms.Button
+$okButton.Text = "Rendben"
+$okButton.Size = New-Object System.Drawing.Size(80,30)
+$okButton.Location = New-Object System.Drawing.Point(40,140)
+$okButton.Add_Click({
+    Write-Output "Felhasználó: RENDRE kattintott"
+    $global:timer.Stop()
+    $form.Close()
+})
+$form.Controls.Add($okButton)
+
+# Gomb: Mégse
+$cancelButton = New-Object System.Windows.Forms.Button
+$cancelButton.Text = "Mégse"
+$cancelButton.Size = New-Object System.Drawing.Size(80,30)
+$cancelButton.Location = New-Object System.Drawing.Point(160,140)
+$cancelButton.Add_Click({
+    Write-Output "Felhasználó: MÉGSE kattintott"
+    $global:timer.Stop()
+    $form.Close()
+})
+$form.Controls.Add($cancelButton)
+
+# Timer
+$global:timer = New-Object System.Windows.Forms.Timer
+$global:timer.Interval = 1000
+$global:timer.Add_Tick({
+    if ($global:seconds5min -ge 0) {
+        $ts5 = [TimeSpan]::FromSeconds($global:seconds5min)
+        $label5minTime.Text = $ts5.ToString("mm\:ss")
+        $global:seconds5min--
+    }
+
+    if ($global:seconds1h -ge 0) {
+        $ts1 = [TimeSpan]::FromSeconds($global:seconds1h)
+        $label1hTime.Text = $ts1.ToString("hh\:mm\:ss")
+        $global:seconds1h--
+    }
+
+    if ($global:seconds5min -lt 0 -and $global:seconds1h -lt 0) {
+        $global:timer.Stop()
+    }
+})
+
+$global:timer.Start()
+$form.ShowDialog()
