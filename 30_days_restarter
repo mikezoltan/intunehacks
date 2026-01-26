@@ -1,0 +1,157 @@
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# Nyelv és napszak szerinti köszöntés
+$culture = [System.Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName
+$hour = (Get-Date).Hour
+
+switch ($culture) {
+    "hu" {
+        if ($hour -lt 5) {
+            $greeting = "Jó éjszakát"
+        } elseif ($hour -lt 12) {
+            $greeting = "Jó reggelt"
+        } elseif ($hour -lt 18) {
+            $greeting = "Jó napot"
+        } else {
+            $greeting = "Jó estét"
+        }
+    }
+    default {
+        if ($hour -lt 5) {
+            $greeting = "Good night"
+        } elseif ($hour -lt 12) {
+            $greeting = "Good morning"
+        } elseif ($hour -lt 18) {
+            $greeting = "Good afternoon"
+        } else {
+            $greeting = "Good evening"
+        }
+    }
+}
+
+# Rendszer uptime napban, szöveges változóban
+$uptimeDays = ((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).Days
+
+$uptimeText = "A számítógép $uptimeDays napja nem lett újraindítva"
+
+
+# Típusos méretek
+[int]$formWidth = 400
+[int]$formHeight = 370
+[int]$buttonPanelHeight = 70
+
+# Pozíció
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+[int]$posX = $screen.Width - $formWidth - 20
+[int]$posY = $screen.Height - $formHeight - 60
+
+# Fő ablak
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Értesítés"
+$form.Size = New-Object System.Drawing.Size($formWidth, $formHeight)
+$form.StartPosition = "Manual"
+$form.Location = New-Object System.Drawing.Point($posX, $posY)
+$form.TopMost = $true
+$form.FormBorderStyle = 'FixedToolWindow'
+$form.ControlBox = $false
+
+# === Tartalompanel ===
+[int]$contentHeight = $formHeight - $buttonPanelHeight
+$contentPanel = New-Object System.Windows.Forms.Panel
+$contentPanel.Size = New-Object System.Drawing.Size($formWidth, $contentHeight)
+$contentPanel.Location = New-Object System.Drawing.Point(0, 0)
+$contentPanel.BackColor = [System.Drawing.Color]::White
+$form.Controls.Add($contentPanel)
+
+# Logó
+$logoBox = New-Object System.Windows.Forms.PictureBox
+$logoBox.SizeMode = 'StretchImage'
+$logoBox.Size = New-Object System.Drawing.Size(64,64)
+$logoBox.Location = New-Object System.Drawing.Point(20,15)
+$contentPanel.Controls.Add($logoBox)
+
+# Szöveg 1
+$labelName = New-Object System.Windows.Forms.Label
+$labelName.Text = "$greeting  Zoltán"
+$labelName.AutoSize = $true
+$labelName.Font = New-Object System.Drawing.Font("Segoe UI",10,[System.Drawing.FontStyle]::Bold)
+$labelName.Location = New-Object System.Drawing.Point(100,20)
+$contentPanel.Controls.Add($labelName)
+
+# Szöveg 2
+$labelStatus = New-Object System.Windows.Forms.Label
+$labelStatus.Text = "Státusz: Admin"
+$labelStatus.AutoSize = $true
+$labelStatus.Font = New-Object System.Drawing.Font("Segoe UI",10)
+$labelStatus.Location = New-Object System.Drawing.Point(100,45)
+$contentPanel.Controls.Add($labelStatus)
+
+# Második kép
+$imageBox = New-Object System.Windows.Forms.PictureBox
+$imageBox.SizeMode = 'StretchImage'
+$imageBox.Size = New-Object System.Drawing.Size(360,80)
+$imageBox.Location = New-Object System.Drawing.Point(20,90)
+$contentPanel.Controls.Add($imageBox)
+
+# Többsoros szöveg
+$messageText = @"
+Ez egy többsoros figyelmeztető üzenet.
+Kérjük, olvassa el figyelmesen az alábbi információkat.
+A visszaszámlálók jelenleg nem aktívak.
+
+$uptimetext
+"@
+
+$multiLabel = New-Object System.Windows.Forms.Label
+$multiLabel.Text = $messageText
+$multiLabel.AutoSize = $true
+$multiLabel.MaximumSize = New-Object System.Drawing.Size(360, 0)
+$multiLabel.Font = New-Object System.Drawing.Font("Segoe UI",9)
+$multiLabel.Location = New-Object System.Drawing.Point(20,180)
+$contentPanel.Controls.Add($multiLabel)
+
+# === Gombpanel ===
+$buttonPanel = New-Object System.Windows.Forms.Panel
+$buttonPanel.Size = New-Object System.Drawing.Size($formWidth, $buttonPanelHeight)
+$buttonPanel.Location = New-Object System.Drawing.Point(0, ($formHeight - $buttonPanelHeight))
+$buttonPanel.BackColor = [System.Drawing.Color]::Gainsboro
+$form.Controls.Add($buttonPanel)
+
+# FlowLayoutPanel a gombokhoz
+$flow = New-Object System.Windows.Forms.FlowLayoutPanel
+$flow.FlowDirection = 'LeftToRight'
+$flow.WrapContents = $false
+$flow.AutoSize = $true
+$flow.AutoSizeMode = 'GrowAndShrink'
+$flow.Anchor = 'Top'
+$flow.Location = New-Object System.Drawing.Point(0, 10)
+$flow.Padding = New-Object System.Windows.Forms.Padding(0)
+$flow.Margin = New-Object System.Windows.Forms.Padding(0)
+$flow.Left = [math]::Floor(($formWidth - ((80 * 2) + 20)) / 2)
+$buttonPanel.Controls.Add($flow)
+
+# Gomb: Rendben
+$okButton = New-Object System.Windows.Forms.Button
+$okButton.Text = "Rendben"
+$okButton.Size = New-Object System.Drawing.Size(80,28)
+$okButton.Margin = New-Object System.Windows.Forms.Padding(0,0,10,0)
+$okButton.Add_Click({
+    Write-Output "Felhasználó: RENDRE kattintott"
+    $form.Close()
+})
+$flow.Controls.Add($okButton)
+
+# Gomb: Mégse
+$cancelButton = New-Object System.Windows.Forms.Button
+$cancelButton.Text = "Mégse"
+$cancelButton.Size = New-Object System.Drawing.Size(80,28)
+$cancelButton.Margin = New-Object System.Windows.Forms.Padding(0)
+$cancelButton.Add_Click({
+    Write-Output "Felhasználó: MÉGSE kattintott"
+    $form.Close()
+})
+$flow.Controls.Add($cancelButton)
+
+# Megjelenítés
+$form.ShowDialog()
