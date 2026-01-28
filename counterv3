@@ -1,0 +1,168 @@
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# Példa változó
+$mainif = 35   # állítsd be igény szerint
+
+# Globális időzítők
+$global:seconds5min = 300
+$global:seconds1h = 3600
+
+# Képernyő pozíció
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$formWidth = 380
+$formHeight = 300
+$posX = $screen.Width - $formWidth - 20
+$posY = $screen.Height - $formHeight - 60
+
+# Form létrehozása
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Értesítés"
+$form.Size = New-Object System.Drawing.Size($formWidth, $formHeight)
+$form.StartPosition = "Manual"
+$form.Location = New-Object System.Drawing.Point($posX, $posY)
+$form.TopMost = $true
+$form.FormBorderStyle = 'FixedToolWindow'
+$form.ControlBox = $false
+
+# Címke
+$label = New-Object System.Windows.Forms.Label
+$label.Text = "PowerShell értesítés visszaszámlálóval:"
+$label.AutoSize = $true
+$label.Location = New-Object System.Drawing.Point(20,15)
+$form.Controls.Add($label)
+
+# --- Layout feltétel ---
+if ($mainif -ge 15 -and $mainif -le 29) {
+    # --- Újraindítás blokk ---
+    $groupRestart = New-Object System.Windows.Forms.GroupBox
+    $groupRestart.Text = "Újraindítás számláló"
+    $groupRestart.Location = New-Object System.Drawing.Point(15,45)
+    $groupRestart.Size = New-Object System.Drawing.Size(340,120)
+    $form.Controls.Add($groupRestart)
+
+    $label5minPrefix = New-Object System.Windows.Forms.Label
+    $label5minPrefix.Text = "Hátralévő idő:"
+    $label5minPrefix.AutoSize = $true
+    $label5minPrefix.Font = New-Object System.Drawing.Font("Segoe UI",12)
+    $label5minPrefix.Location = New-Object System.Drawing.Point(15,30)
+    $groupRestart.Controls.Add($label5minPrefix)
+
+    $label5minTime = New-Object System.Windows.Forms.Label
+    $label5minTime.Text = "05:00"
+    $label5minTime.AutoSize = $true
+    $label5minTime.Font = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)
+    $label5minTime.Location = New-Object System.Drawing.Point(160,30)
+    $groupRestart.Controls.Add($label5minTime)
+
+    $progress5min = New-Object System.Windows.Forms.ProgressBar
+    $progress5min.Location = New-Object System.Drawing.Point(15,65)
+    $progress5min.Size = New-Object System.Drawing.Size(300,20)
+    $progress5min.Minimum = 0
+    $progress5min.Maximum = 300
+    $progress5min.Value = 300
+    $groupRestart.Controls.Add($progress5min)
+
+    # --- Gombok ---
+    $okButton = New-Object System.Windows.Forms.Button
+    $okButton.Text = "Rendben"
+    $okButton.Size = New-Object System.Drawing.Size(80,30)
+    $okButton.Location = New-Object System.Drawing.Point(60,180)
+    $okButton.Add_Click({
+        Write-Output "Felhasználó: RENDRE kattintott"
+        $global:timer.Stop()
+        $form.Close()
+    })
+    $form.Controls.Add($okButton)
+
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = "Mégse"
+    $cancelButton.Size = New-Object System.Drawing.Size(80,30)
+    $cancelButton.Location = New-Object System.Drawing.Point(180,180)
+    $cancelButton.Add_Click({
+        Write-Output "Felhasználó: MÉGSE kattintott"
+        $global:timer.Stop()
+        $form.Close()
+    })
+    $form.Controls.Add($cancelButton)
+
+    # Timer csak az 5 perceshez
+    $global:timer = New-Object System.Windows.Forms.Timer
+    $global:timer.Interval = 1000
+    $global:timer.Add_Tick({
+        if ($global:seconds5min -ge 0) {
+            $ts5 = [TimeSpan]::FromSeconds($global:seconds5min)
+            $label5minTime.Text = $ts5.ToString("mm\:ss")
+            $progress5min.Value = $global:seconds5min
+            $global:seconds5min--
+        }
+        if ($global:seconds5min -lt 0) { $global:timer.Stop() }
+    })
+}
+
+elseif ($mainif -ge 30) {
+    # --- Leállás blokk ---
+    $groupShutdown = New-Object System.Windows.Forms.GroupBox
+    $groupShutdown.Text = "Leállás számláló"
+    $groupShutdown.Location = New-Object System.Drawing.Point(15,45)
+    $groupShutdown.Size = New-Object System.Drawing.Size(340,120)
+    $form.Controls.Add($groupShutdown)
+
+    $label1hPrefix = New-Object System.Windows.Forms.Label
+    $label1hPrefix.Text = "Hátralévő idő:"
+    $label1hPrefix.AutoSize = $true
+    $label1hPrefix.Font = New-Object System.Drawing.Font("Segoe UI",12)
+    $label1hPrefix.Location = New-Object System.Drawing.Point(15,30)
+    $groupShutdown.Controls.Add($label1hPrefix)
+
+    $label1hTime = New-Object System.Windows.Forms.Label
+    $label1hTime.Text = "01:00:00"
+    $label1hTime.AutoSize = $true
+    $label1hTime.Font = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)
+    $label1hTime.Location = New-Object System.Drawing.Point(160,30)
+    $groupShutdown.Controls.Add($label1hTime)
+
+    $progress1h = New-Object System.Windows.Forms.ProgressBar
+    $progress1h.Location = New-Object System.Drawing.Point(15,65)
+    $progress1h.Size = New-Object System.Drawing.Size(300,20)
+    $progress1h.Minimum = 0
+    $progress1h.Maximum = 3600
+    $progress1h.Value = 3600
+    $groupShutdown.Controls.Add($progress1h)
+
+    # --- Csak OK gomb középen ---
+# Számoljuk ki előre az X pozíciót
+$buttonWidth = 80
+$buttonHeight = 30
+$buttonY = 180
+
+$centerX = [int](($formWidth - $buttonWidth) / 2)
+
+$okButton = New-Object System.Windows.Forms.Button
+$okButton.Text = "Rendben"
+$okButton.Size = New-Object System.Drawing.Size($buttonWidth,$buttonHeight)
+$okButton.Location = New-Object System.Drawing.Point($centerX,$buttonY)
+$okButton.Add_Click({
+    Write-Output "Felhasználó: RENDRE kattintott"
+    $global:timer.Stop()
+    $form.Close()
+})
+$form.Controls.Add($okButton)
+
+
+    # Timer csak az 1 óráshoz
+    $global:timer = New-Object System.Windows.Forms.Timer
+    $global:timer.Interval = 1000
+    $global:timer.Add_Tick({
+        if ($global:seconds1h -ge 0) {
+            $ts1 = [TimeSpan]::FromSeconds($global:seconds1h)
+            $label1hTime.Text = $ts1.ToString("hh\:mm\:ss")
+            $progress1h.Value = $global:seconds1h
+            $global:seconds1h--
+        }
+        if ($global:seconds1h -lt 0) { $global:timer.Stop() }
+    })
+}
+
+$global:timer.Start()
+$form.ShowDialog()
