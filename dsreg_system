@@ -1,0 +1,36 @@
+# Admin PowerShell-ben:
+Start-Process cmd -ArgumentList '/c dsregcmd /status /debug' -Verb RunAs -WindowStyle Hidden -WorkingDirectory C:\
+# Vagy scheduled task-ként:
+$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c dsregcmd /status /debug > C:\dsreg_system.txt"
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(5)
+Register-ScheduledTask -TaskName "DSREG_SYSTEM" -Action $action -Trigger $trigger -User "NT AUTHORITY\SYSTEM" -RunLevel Highest -Force
+Start-ScheduledTask -TaskName "DSREG_SYSTEM"
+Start-Sleep 10
+Get-Content C:\dsreg_system.txt
+Unregister-ScheduledTask -TaskName "DSREG_SYSTEM" -Confirm:$false
+
+
+# SYSTEM kontextusú dsregcmd futtatás Scheduled Task-ként, törlés nélkül, 60 sec várakozással
+
+$action = New-ScheduledTaskAction `
+    -Execute "cmd.exe" `
+    -Argument "/c dsregcmd /status /debug > C:\dsreg_system.txt"
+
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(5)
+
+Register-ScheduledTask `
+    -TaskName "DSREG_SYSTEM" `
+    -Action $action `
+    -Trigger $trigger `
+    -User "NT AUTHORITY\SYSTEM" `
+    -RunLevel Highest `
+    -Force
+
+Start-ScheduledTask -TaskName "DSREG_SYSTEM"
+
+# 60 másodperces várakozás
+Start-Sleep -Seconds 60
+
+# Eredmény kiolvasása
+Get-Content C:\dsreg_system.
+
