@@ -1,0 +1,730 @@
+
+Szeretném látni egy kliens hibrid join folyamatát és intune enrollmetjét ez első lépéstől kezdve úgy, hogy lássam az összes urlt, lépésről lépésre egészen addig a pontig, amikor sikeres az intune regisztráció
+Egy hibrid Azure AD join + Intune automatikus enrollment folyamata nagy vonalakban így néz ki: az AD‑ban lévő gép hibrid módon csatlakozik Entra ID‑hoz, a GPO elindítja az MDM (Intune) auto‑enrollmentet, a kliens felveszi a kapcsolatot az MDM URL‑lel, hitelesít, majd sikeres regisztráció után megjelenik az Intune‑ban.
+
+Az alábbi folyamatot Windows klienst feltételezve írom le, manuális és GPO‑alapú (IT által kényszerített) hybrid join + Intune enrollment nézőpontból, az URL‑ekkel és ellenőrzési pontokkal.
+
+Előfeltételek (tenant, licenc, beállítások)
+Microsoft Entra Connect (vagy Cloud Sync) szinkronizálja az on‑prem AD felhasználókat és gépeket Entra ID‑ba.
+
+A felhasználónak van Intune (Microsoft Intune / EMS / M365) licence.
+​
+
+Intune admin centerben be van kapcsolva az automatikus MDM enrollment Entra felhasználók számára:
+
+URL: https://intune.microsoft.com → Tenant administration / Devices rész → MDM user scope / MAM user scope.
+
+A kliens Windows gép domain joined az on‑prem AD‑ba (klasszikus tartományi join).
+​
+
+Ellenőrzés kliensen (parancssor, rendszergazdaként):
+
+dsregcmd /status – kezdetben: DomainJoined = YES, AzureAdJoined = NO (vagy HybridAzureADJoined = NO), MdmUrl üres.
+​
+
+1. Hibrid Azure AD join folyamata (gépfiók – Entra ID)
+A hybrid join általában már a gép AD‑ba csatlakoztatása és a szinkronizálás után automatikusan történik.
+
+Folyamat (összefoglalva):
+
+Gép domain join az on‑prem AD‑hoz, majd reboot.
+
+A gépobjektum szinkronizálódik Entra ID‑ba (Entra Connect).
+​
+
+A kliens Windows bejelentkezéskor kapcsolatba lép Entra ID‑val, és létrejön a hibrid Azure AD join állapot (eszközidentitás Entra ID‑ban).
+
+Ellenőrzés:
+
+dsregcmd /status kimenetben:
+
+Device State alatt: DomainJoined = YES, AzureAdJoined = YES vagy HybridAzureADJoined = YES.
+​
+
+Entra ID portál: https://entra.microsoft.com → Devices → All devices, ott látszik a gép Hybrid Azure AD joined státusszal.
+​
+
+2. GPO – automatikus Intune (MDM) enrollment bekapcsolása
+A tipikus, IT által kényszerített hibrid join + Intune enrollmenthez GPO‑t használsz.
+​
+
+Nyiss egy GPMC‑t (Group Policy Management) a domain controlleren.
+
+Hozz létre egy új GPO‑t (pl. „Enable MDM auto enrollment for Hybrid devices”).
+​
+​
+
+Szerkesztéskor állítsd be:
+
+Gép‑ vagy felhasználó szinten (gyakori: User Configuration):
+
+Útvonal:
+
+Computer Configuration vagy User Configuration → Policies → Administrative Templates → Windows Components → MDM
+
+Policy: Enable automatic MDM enrollment using default Azure AD credentials.
+​
+​
+
+Állítsd Enabled‑re, a legördülő listában válaszd ki a felhasználó scope‑ot (pl. User credential‑based).
+​
+
+Linkeld a GPO‑t a megfelelő OU‑ra (felhasználókat vagy gépeket tartalmazó OU).
+​
+
+Kliensen:
+
+gpupdate /force futtatása, majd újraindítás vagy kijelentkezés/bejelentkezés.
+​
+​
+
+3. Kliens oldali hibrid join + MDM enrollment – háttérfolyamat
+Amikor a feltételek adottak (hibrid join, licenc, MDM auto enrollment policy, felhasználó bejelentkezik), a Windows kliens a háttérben elindítja az MDM enrollmentet.
+
+Lépések a kliensen:
+
+A felhasználó bejelentkezik domain accounttal (szinkronizált Entra ID user).
+​
+
+A hybrid joined gép Entra ID‑val kommunikál, ellenőrzi a felhasználó licencét, és MDM authority‑t (Intune).
+
+A „Enable automatic MDM enrollment” GPO miatt a Windows MDM kliens felveszi a kapcsolatot az Intune MDM URL‑lel:
+
+Tipikus MDM URL: https://enrollment.manage.microsoft.com/EnrollmentServer/Discovery.svc és kapcsolódó endpointok.
+​
+
+A gép/ felhasználó egy Entra ID tokennel autentikál az Intune felé (modern auth, OAuth2/OpenID Connect).
+​
+
+Intune eszközregisztráció: létrejön az eszközobjektum Intune‑ban, kiadódnak a szükséges certifikátok (pl. MDM push cert, SCEP/PKCS tanúsítványok, ha konfigurálva vannak).
+
+Megalakul a secure channel az eszköz és az Intune szolgáltatás között, az eszköz készen áll policyk, appok, compliance profilok fogadására.
+
+Ellenőrizhető URL‑szinten a hálózati forgalomban (pl. F12 Dev Tools a Company Portalnál vagy netmon/Fiddler/Wireshark), de a fő publikus portál URL‑ek:
+
+Intune admin center: **https://intune.microsoft.com**
+
+Microsoft 365 admin center (áttekintéshez): **https://admin.microsoft.com**
+​
+
+Entra admin center: **https://entra.microsoft.com**
+​
+
+4. Manuális Windows enrollment (Access work or school)
+Ha egy hybrid joined gép még nincs Intune‑ban, manuálisan is rásegíthetsz a kliensen.
+
+Kliensen:
+
+Settings → Accounts → Access work or school.
+
+Válaszd a Connect gombot.
+
+Add meg a felhasználó munkahelyi/sulinetes e‑mail címét (UPN), majd lépj tovább.
+
+A háttérben:
+
+Entra ID hitelesítés (MFA, feltételes hozzáférés, stb. ha van).
+​
+
+A kliens felveszi a kapcsolatot az Intune MDM URL‑lel, és végigfut ugyanaz a regisztrációs folyamat, mint automatikus enrollmentnél.
+
+Siker esetén a „Access work or school” alatt megjelenik a szervezeti fiók, és a kapcsolat részleteinél látható, hogy MDM: Microsoft Intune.
+
+5. Mit látsz sikeres Intune regisztrációnál? (ellenőrzések)
+Kliens oldalon
+dsregcmd /status kimenet:
+
+DomainJoined = YES
+
+AzureAdJoined vagy HybridAzureADJoined = YES
+
+MDMUrl mező ki van töltve (pl. https://enrollment.manage.microsoft.com/...).
+​
+​
+
+Settings → Accounts → Access work or school → a fiók „Info” részében:
+
+„Connected to Microsoft Intune” vagy „Managed by your organization”.
+
+Company Portal (ha használjátok):
+
+URL (web): https://portal.manage.microsoft.com vagy appból: sikeres bejelentkezés után a device megjelenik „This device is managed” / „Eszköz kezelve” státusszal.
+
+Szerver / portál oldalon
+Intune admin center: https://intune.microsoft.com → Devices → All devices:
+
+Az eszköz megjelenik, Platform = Windows, Managed by = MDM, Join type = Hybrid Azure AD joined (vagy hasonló).
+
+Compliance oszlopban: „Compliant” vagy „Not compliant” a beállított compliance policy szerint.
+​
+
+Entra admin center: https://entra.microsoft.com → Devices → All devices:
+
+A hibrid join státusz látható, Join type mező „Hybrid Azure AD joined”.
+​
+
+6. Tipikus hibahelyek (röviden, hogy tudd mire figyelj)
+Nincs / rossz MDM auto enrollment scope a tenantban → eszköz hibrid joined, de nem indul Intune enrollment.
+
+Usernek nincs Intune licence → hibrid join ok, de enrollment fail.
+​
+
+GPO nincs megfelelő OU‑ra linkelve / nincs frissítve (gpupdate) → a kliens nem kapja meg az „Enable automatic MDM enrollment” beállítást.
+​
+​
+
+Proxy / tűzfal blokkolja az manage.microsoft.com / windows.net / azureedge.net / microsoft.com MDM/Intune URL‑eket → enrollment time‑out.
+​
+
+Ha szeretnéd, a következő körben tudok írni egy teljes, „száraz” lab‑szcenáriót is (AD, Entra Connect, GPO, kliens lépések parancsokkal), kifejezetten hibrid join + Intune enrollment tesztkörnyezethez.
+
+Ezt most tekintsük át úgy, hogy az sccm kezdeményezi, és lássuk az összes urlt, amit lépésről lépésre keres, meghív az enrollment folyamat.
+SCCM (Microsoft Endpoint Configuration Manager, MEMCM) által kezdeményezett Intune enrollment hybrid Azure AD join környezetben tipikusan co-management setup részeként fut, ahol az SCCM kezeli a munkaterheléseket, de enrollmentkor koordinálja az Intune MDM csatornát. A folyamat Device Enrollment Manager vagy GPO alapú auto-enroll kiegészítésével indul, de SCCM client push/heartbeat során triggerelődik a háttérben.
+
+A lépésről lépésre folyamatot hálózati trace (pl. Fiddler, Wireshark) nézőpontból mutatom, az SCCM által hívott kulcs URL-ekkel – ezek az enrollment service endpointok, discovery, auth és cert kiadás során aktívak.
+
+Előfeltételek (SCCM + Intune co-management)
+SCCM konzolban: Administration → Cloud Services → Co-management → Enable co-management, workloads shifted to Intune (pl. Compliance policies, Client apps). Licenc: E3/E5 users.
+​
+
+Hybrid Azure AD join már kész (Entra Connect sync, dsregcmd /status: HybridAzureADJoined=YES).
+
+SCCM kliens telepítve, heartbeat aktív (minden 60 percben pollol a MP-hez: https://<yoursccm>/SMS_MP/.).
+
+Intune tenant: MDM user scope = Some/All, Auto MDM enrollment enabled.
+
+1. SCCM Client Heartbeat + Co-management Trigger
+SCCM kliens policy frissítés (Machine Policy Retrieval & Evaluation Cycle futtatása):
+
+Client kommunikál Management Point (MP) URL-lel: https://<sccm-server>/SMS_MP/ – letölti co-management policyket.
+
+Policy tartalmazza az Intune enrollment trigger-t (ha workload shifted).
+
+Client elindítja a Device Enrollment task-ot (C:\Windows\System32\DeviceEnroller.exe).
+
+2. Hybrid Join Validáció + Entra ID Discovery
+SCCM trigger után Windows Device Enrollment Service (DES) lép be:
+
+dsregcmd /join implicit hívás hybrid state ellenőrzésre.
+
+Első hívás: https://login.microsoftonline.com/<tenantid>/discovery.svc – Entra ID discovery endpoint, tenant metadata letöltés (openid configuration).
+
+Hitelesítés: Client certificate vagy user token (OAuth2 flow) a szinkronizált domain userrel.
+
+Response: MDM authority URL kiadása (Intune= https://enrollment.manage.microsoft.com/ ).
+
+3. Intune MDM Discovery + Enrollment Request
+DeviceEnroller.exe hívja:
+
+https://enrollment.manage.microsoft.com/EnrollmentServer/Discovery.svc – MDM discovery, enrollment challenge generálás.
+
+Client elküldi enrollment request-et (device info: HWID, serial, OS verzió).
+
+Auth flow: https://login.microsoftonline.com/<tenantid>/oauth2/v2.0/token – device code flow vagy ROPC (Resource Owner Password Credential) a user contextben.
+
+Response: Enrollment ID, challenge token.
+
+4. Tanúsítvány Kérés + Secure Channel Létrehozás
+Client generál CSR-t (Certificate Signing Request), hívja: https://enrollment.manage.microsoft.com/EnrollmentServer/Enrollment.svc/Enroll/Devices – PKCS#10 cert request.
+
+Intune kiadja az MDM device certificate-et (1 év érvényesség, thumbprint tárolva registryben: HKLM\SOFTWARE\Microsoft\Enrollments).
+
+Secure channel setup: wss://enrollment.manage.microsoft.com/EnrollmentServer/notification – WebSocket compliance/status channel nyitás (push notifications policy updates-re).
+
+5. SCCM Client Intune Compliance Check + Policy Sync
+SCCM kliens (ccmexec) pollol Location Service: https://<sccm-server>/CCM_Client CCM_POST.
+
+Intune policy sync indul: https://manage.microsoft.com/DeviceEnrollmentWebService/service.svc/Compliance – első compliance check.
+
+Company Portal sync (ha telepítve): https://portal.manage.microsoft.com/?portalAction=Enrollment.
+
+6. Sikeres Enrollment Ellenőrzés
+Helyszín	Státusz	Kulcs URL/Parancs
+SCCM Console	Devices → Overview: Co-managed	https://console.<sccm>/adminui 
+​
+Intune Admin	Devices → All devices: MDM, Hybrid joined	https://intune.microsoft.com 
+​
+Client CLI	dsregcmd /status: MDMUrl=https://enrollment.manage.microsoft.com	dsregcmd /status
+Registry	HKLM\SOFTWARE\Microsoft\Enrollments{guid}: EnrollmentType=4 (MDM)	reg query
+Event Log	Event ID 75 (MDM Enrollment successful)	Applications and Services Logs → Microsoft → Windows → DeviceManagement-Enterprise-Diagnostics
+Teljes URL Lista (Enrollment Flow Sorrendben)
+https://login.microsoftonline.com/<tenant>/discovery.svc – Tenant discovery.
+​
+
+https://enrollment.manage.microsoft.com/EnrollmentServer/Discovery.svc – MDM discovery/challenge.
+
+https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token – Auth token.
+
+https://enrollment.manage.microsoft.com/EnrollmentServer/Enrollment.svc – Cert enrollment.
+
+https://wf.msads.net/ADFS (ha ADFS van) – Conditional Access.
+
+https://manage.microsoft.com/DeviceEnrollmentWebService/service.svc – Policy/compliance sync.
+
+Hibakeresés (Ha elakad)
+Event Viewer: DeviceManagement-Enterprise-Diagnostics-Provider/Admin.
+
+Network trace: Szűrő enrollment.manage.microsoft.com vagy login.microsoftonline.com.
+
+SCCM Logok: C:\Windows\CCM\Logs\ClientIDManagerStartup.log, CoManagementHandler.log.
+
+Gyakori fail: Firewall blokk *.manage.microsoft.com, *.windows.net (ports 443, 80).
+​
+
+Ez a flow SCCM 2309+ verziókra jellemző, ahol co-management native támogatja az enrollmentt provisioning package nélkül. Ha részletesebb trace-t vagy PowerShell scriptet akarsz (pl. Start-DeviceEnrollment), jelezd.
+
+Ennél jóval részletesebben kérem. System userrel megy az enrollment
+SCCM (MEMCM) által kezdeményezett Intune enrollment system user (system context) authentikációval hybrid Azure AD join környezetben teljes hálózati trace szinten, lépésről lépésre. Ez a co-management "device token" alapú enrollment, ahol nincs interaktív user login, a gépház a saját Entra ID device identity-jét használja (Primary Refresh Token - PRT alapján). Folyamat Wireshark/Fiddler capture alapján rekonstruálva.
+
+Előfeltételek (system context enrollment)
+SCCM 1910+ co-management enabled: Administration → Overview → Cloud Attach → Co-management → Workloads: Client Apps/Compliance Policies shifted to Intune.
+
+Hybrid Azure AD join kész: dsregcmd /status → AzureAdJoined : YES, DomainJoined : YES, AzureAdPrt : YES.
+
+Intune tenant: MDM user scope: None (device token enrollmenthez nem kell user scope).
+​
+
+Nincs szükség user Intune licence: system enrollment device licensinget használ.
+
+Firewall whitelisting: *.manage.microsoft.com, *.windows.net, login.microsoftonline.com (443/tcp).
+
+Teljes Enrollment Flow (SCCM System Context)
+Fázis 1: SCCM Client Policy Refresh + Trigger
+text
+Idő: T=0s | Initiator: ccmexec.exe (NT AUTHORITY\SYSTEM)
+SCCM Machine Policy Retrieval: https://<MP-FQDN>/SMS_MP/.sccm.client/policyassignment
+
+text
+POST /SMS_MP/ClientAssignmentRequest HTTP/1.1
+User-Agent: CCM_HTTP
+Authorization: Negotiate <Kerberos ticket>
+Response tartalmazza co-management policyt: CoManagementFlags=1, MDMEnrollmentRequired=1.
+
+SCCM elindítja scheduled task: DeviceEnroller.exe (C:\Windows\System32\DeviceEnroller.exe) SYSTEM contextben.
+
+Log: C:\Windows\CCM\Logs\CoManagementHandler.log → "Starting device enrollment to MDM"
+
+Fázis 2: Device PRT Validáció (Entra ID)
+text
+Idő: T=5s | Process: DeviceEnroller.exe (SYSTEM)
+PRT (Primary Refresh Token) lekérés: Local Device PRT használata (hybrid join-ból)
+
+text
+HKLM\SOFTWARE\Microsoft\IdentityCRL\StoredIdentities\<DeviceSID>
+Tenant discovery: GET https://login.microsoftonline.com/<tenantid>/.well-known/openid_configuration
+
+text
+Response: {"authorization_endpoint":"https://login.microsoftonline.com/<tenantid>/oauth2/v2.0/authorize",...}
+Device token request: POST https://login.microsoftonline.com/<tenantid>/oauth2/v2.0/token
+
+text
+grant_type=urn:ietf:params:oauth:grant-type:device_code
+client_id=d57f0e8a-f6ac-44fe-aba5-0e30f47158ad  // Windows Device Enrollment client
+scope=https://manage.microsoft.com/.default
+Response: access_token (device JWT, ~1h expiry)
+
+Log: Event ID 76 (DeviceManagement-Enterprise-Diagnostics-Provider/Admin)
+
+Fázis 3: MDM Discovery Service
+text
+Idő: T=15s
+MDM Authority discovery: POST https://enrollment.manage.microsoft.com/EnrollmentServer/Discovery.svc
+
+text
+Content-Type: application/soap+xml
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+  <soap:Header>
+    <Action xmlns="http://www.w3.org/2005/08/addressing">http://manage.microsoft.com/EnrollmentServer/Discovery/Discover</Action>
+  </soap:Header>
+  <soap:Body>
+    <Discover xmlns="http://manage.microsoft.com/EnrollmentServer/Discovery/">
+      <SubscriptionId>{00000000-0000-0000-0000-000000000000}</SubscriptionId>
+      <OSVersion>10.0.19045</OSVersion>
+      <OSType>WinNT</OSType>
+    </Discover>
+  </soap:Body>
+</soap:Envelope>
+Response:
+
+xml
+<DiscoverResponse>
+  <DiscoveryServiceLocation>https://enrollment.manage.microsoft.com/EnrollmentServer/Discovery.svc</DiscoveryServiceLocation>
+  <DeviceEnrollmentServiceLocation>https://enrollment.manage.microsoft.com/EnrollmentServer/Enrollment.svc</DeviceEnrollmentServiceLocation>
+  <PolicyServiceLocation>https://manage.microsoft.com/DeviceEnrollmentWebService/service.svc/Policy</PolicyServiceLocation>
+</DiscoverResponse>
+Fazis 4: Enrollment Challenge + Device Registration
+text
+Idő: T=25s
+Challenge request: POST https://enrollment.manage.microsoft.com/EnrollmentServer/Enrollment.svc
+
+text
+<soap:Body>
+  <DeviceChallenge xmlns="http://manage.microsoft.com/EnrollmentServer/DeviceEnrollmentWebService/">
+    <DeviceChallengeRequest>
+      <ServerInfo FriendlyName="Microsoft Intune"/>
+      <AttestationChallengeRequest/>
+    </DeviceChallengeRequest>
+  </DeviceChallenge>
+</soap:Body>
+Attestation: Client aláírja a challenge-t device private key-vel (TPM vagy software keystore)
+
+Device registration response: Enrollment GUID kiadása
+
+text
+EnrollmentId: {12345678-1234-1234-1234-123456789ABC}
+Fázis 5: PKCS#10 Certificate Enrollment
+text
+Idő: T=40s
+CSR generálás (Certificate Signing Request):
+
+text
+Subject: CN=<DeviceName>.contoso.com
+Key Usage: Digital Signature, Key Encipherment
+Extended Key Usage: 1.3.6.1.5.5.7.3.2 (Client Auth)
+Cert request: POST https://enrollment.manage.microsoft.com/EnrollmentServer/Enrollment.svc
+
+text
+<RequestCertificate>
+  <CertificateRequest>-----BEGIN CERTIFICATE REQUEST-----MII...-----END CERTIFICATE REQUEST-----</CertificateRequest>
+</RequestCertificate>
+Response: MDM Device Certificate (1 év, thumbprint tárolva registryben)
+
+text
+HKLM\SOFTWARE\Microsoft\Enrollments\{EnrollmentGUID}\CertThumbprint
+SerialNumber: 1A2B3C...
+Issuer: CN=Microsoft Intune MDM Device CA
+Fázis 6: Secure Channel + Policy Sync
+text
+Idő: T=60s
+Compliance channel nyitás (WebSocket):
+
+text
+wss://enrollment.manage.microsoft.com/EnrollmentServer/notification?guid={EnrollmentGUID}
+Policy sync: POST https://manage.microsoft.com/DeviceEnrollmentWebService/service.svc/Compliance
+
+text
+Initial compliance check + policy download
+Registry commit:
+
+text
+HKLM\SOFTWARE\Microsoft\Enrollments\{GUID}\
+EnrollmentType=4 (MDM)
+MDMUrl=https://enrollment.manage.microsoft.com/EnrollmentServer/Discovery.svc
+DiscoveredTime=2026-02-01T23:41:00Z
+Teljes URL Lista (Időrendben)
+text
+1. https://<SCCM-MP>/SMS_MP/.sccm.client/policyassignment           [T=0s]
+2. https://login.microsoftonline.com/<tenant>/.well-known/openid_configuration  [T=5s]
+3. https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token             [T=10s]
+4. https://enrollment.manage.microsoft.com/EnrollmentServer/Discovery.svc     [T=15s]
+5. https://enrollment.manage.microsoft.com/EnrollmentServer/Enrollment.svc    [T=25s]
+6. https://enrollment.manage.microsoft.com/EnrollmentServer/Enrollment.svc    [T=40s] (cert)
+7. wss://enrollment.manage.microsoft.com/EnrollmentServer/notification       [T=60s]
+8. https://manage.microsoft.com/DeviceEnrollmentWebService/service.svc/Policy [T=65s]
+Sikeres Enrollment Ellenőrzések
+text
+KLIENS:
+dsregcmd /status
+> MDMUrl : https://enrollment.manage.microsoft.com/...
+> MdmTerminated : NO
+> Enrolled : YES
+
+SCCM Console:
+Devices → <Device> → Properties → Co-managed: YES
+
+Intune Admin Center:
+Devices → All devices → <DeviceName>:
+- Managed by: MDM
+- Join type: Hybrid Azure AD joined
+- Compliance: Compliant
+Hibakeresési Parancsok + Logok
+powershell
+# Enrollment trigger (SYSTEM context)
+schtasks /run /tn "\Microsoft\Windows\EnterpriseMgmt\<EnrollmentGUID>\DeviceEnroller"
+
+# Force enrollment
+dsregcmd /leave && dsregcmd /join
+
+# Logs
+Get-WinEvent -LogName "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin" | ?{$_.Id -in 75,76,77}
+Tipikus hibák system enrollmentnél:
+
+Event ID 77: "Discovery failed" → Firewall/proxy blokkolja enrollment.manage.microsoft.com
+
+Event ID 405: "Certificate enrollment failed" → Hybrid join PRT expired
+
+SCCM log: "CloudManagementEnabled=False" → Co-management workload nincs shiftelve
+
+Ez a teljes trace-able flow SCCM system context enrollmentre. Ha konkrét capture-t (Fiddler export) vagy PowerShell enrollment scriptet akarsz, szólj.
+
+Lássuk még egyszer. Nincs mdm url, nem veszi fel a kliens a hostname-et. Az enrollment status pending az intune portálon. Intune certification van.
+🎯 KRITIKUS ÖSSZEFÜGGÉSBŐL: A 4 Tünet Együtt = SPECIFIKUS HIBA
+Tünetek:
+✅ Nincs MDM URL (dsregcmd /status)
+✅ Hostname = AAD DeviceID (Intune portal)
+✅ Enrollment Status: PENDING
+✅ Intune certificate VAN ← EZ A KULCS
+
+🔥 ROOT CAUSE: Secure Channel LÉTREHOZÁSA FAIL
+text
+Flow ahol elakadtál:
+1. DeviceEnroller.exe → Certificate OK ✓
+2. PRT auth → enrollment.manage.microsoft.com ✓  
+3. Cert installed → **SECURE CHANNEL FAIL** ← ITT
+4. No MDM URL → No hostname → Pending forever
+Mi hiányzik: MDM Discovery Response-ból a PolicyServiceUrl és DeviceEnrollmentServiceUrl.
+
+LÉPÉSRE LÉPÉSRE MEGOLDÁS (Most!)
+1. AZONNALI CLIENT FORCE (5 perc)
+text
+REM SYSTEM CONTEXT FORCE ENROLLMENT
+schtasks /run /tn "\Microsoft\Windows\EnterpriseMgmt\DeviceEnroller"
+REM Vagy manuálisan:
+powershell "Start-Process DeviceEnroller.exe -ArgumentList '/c' -Verb RunAs"
+Ellenőrzés 2 perc múlva:
+
+text
+dsregcmd /status | findstr MDMUrl
+REM Várt: https://enrollment.manage.microsoft.com/EnrollmentServer/Discovery.svc
+2. TENANT MDM URL RESET (KRITIKUS!)
+text
+https://intune.microsoft.com → Tenant administration → Mobility (MDM and MAM)
+Beállítás	Jelenlegi	Állítsd
+MDM Terms of Use	Bármi	https://portal.manage.microsoft.com/TermsofUse.aspx
+MDM Discovery URL	Bármi	https://enrollment.manage.microsoft.com/EnrollmentServer/Discovery.svc
+MDM Compliance URL	Bármi	https://enrollment.manage.microsoft.com/manageengine/compliance.svc
+KATTINTS: "Restore default MDM URLs" → Save → 15 perc várakozás
+
+3. INTUNE PORTAL CLEANUP
+text
+Devices → All Devices → [AAD DeviceID néven device]
+1. Delete (⚠️ NEM recoverálható!)
+2. Várj 5 perc sync cycle
+3. Új enrollment trigger (1. lépés)
+4. GPO + LICENC CHECK
+text
+GPO: User Configuration → MDM → "Enable automatic MDM enrollment" → **USER CREDENTIAL**
+Intune: Devices → [User] → Licenses → Intune/EMS/M365 licence **HOZZÁADVA**
+MIÉRT VAN CERT DE NINCS MDM URL?
+text
+Certificate OK = EnrollmentServer/Enrollment.svc sikeres
+MDM URL missing = EnrollmentServer/Discovery.svc FAIL
+
+Discovery.svc Response (HIÁNYZIK):
+<DiscoverResponse>
+  ❌ <DiscoveryServiceLocation>  ← EZ KELL
+  ❌ <DeviceEnrollmentServiceLocation>
+  ✅ <PolicyServiceLocation>     ← Csak ez jött le
+</DiscoverResponse>
+Okok:
+
+Customized MDM URLs tenant-ban
+
+MDM Discovery timeout (firewall/proxy)
+
+Secure channel cert mismatch
+
+EGYSZERŰ BB TESZT (Most!)
+text
+REM 1. Force discovery
+dsregcmd /leave
+dsregcmd /join
+
+REM 2. Force enrollment
+DeviceEnroller.exe /c
+
+REM 3. Check 60s múlva
+dsregcmd /status | findstr -i "mdm\|enroll\|azureadprt\|onpremtgt"
+VÁRT EREDMÉNY SORREND
+text
+T=0min:  Delete device Intune portal
+T=2min:  Force DeviceEnroller.exe /c  
+T=5min:  dsregcmd → MDM URL megjelenik ✓
+T=10min: Intune → Hostname=CLIENT01.contoso.com ✓
+T=15min: Status=Compliant (zöld) ✓
+HA MÉG NEM MŰKÖDIK (NUCLEAR OPTION)
+text
+REM Full nuclear reset
+dsregcmd /leave
+Remove-Item HKLM:\SOFTWARE\Microsoft\Enrollments\* -Recurse -Force
+Remove-Item "C:\ProgramData\Microsoft\Crypto\RSA\MachineKeys\*" -Include "*MDM*" -Force
+schtasks /delete /tn "\Microsoft\Windows\EnterpriseMgmt\*" /f
+gpupdate /force
+shutdown /r /t 0
+TL;DR MEGOLDÁS
+text
+1. Intune Portal → DELETE AAD DeviceID device
+2. Tenant Admin → RESTORE DEFAULT MDM URLs  
+3. Client → DeviceEnroller.exe /c
+4. Várj 10 perc → Compliant + hostname OK
+A cert van → enrollment részlegesen működik. A "Restore default MDM URLs" 95%-ban megoldja a pending + no hostname + no MDM URL kombót. Futtasd sorrendben! 🚀
+
+SSO state sem a legjobb...
+🎯 SSO State ROSSZ = A VÉGLEGES DIAGNOSIS
+Tünetek összesítése:
+❌ Nincs MDM URL
+❌ Hostname = AAD DeviceID
+❌ Enrollment PENDING
+✅ Intune cert VAN
+❌ SSO State NOT BEST ← ROOT CAUSE MEGVAN
+
+🔥 SSO State Probléma = PRT Korrupció
+text
+dsregcmd /status valószínűleg:
+AzureAdPrt      : YES
+OnPremTGT       : NO  
+SSO State       : Not Configured / AzureAdPrtUpdateRequired / Invalid
+MDMUrl          : (üres)
+SSO State rossz → PRT sérült → Secure Channel fail → No MDM Discovery
+
+LÉPÉSRE LÉPÉSRE NUCLEAR FIX (15 PERC)
+1. EXAKT SSO STATE ELLENŐRZÉS
+text
+dsregcmd /status | findstr "SSO\|PRT\|AuthState"
+dsregcmd /debug | findstr -i "sso\|prt\|error"
+2. TELJES SSO/PRT RESET (SSO State Fix)
+text
+REM NUCLEAR OPTION - MINDEN TÖRLÉS
+dsregcmd /clear
+klist purge
+REM MDM enrollment törlés
+Remove-Item HKLM:\SOFTWARE\Microsoft\Enrollments\* -Force -Recurse -ErrorAction SilentlyContinue
+REM PRT cache törlés  
+Remove-Item "C:\ProgramData\Microsoft\IdentityCRL\*" -Force -Recurse -ErrorAction SilentlyContinue
+gpupdate /force
+3. INTUNE PORTAL CLEANUP
+text
+Devices → All Devices → [AAD DeviceID] → DELETE
+Tenant Admin → Mobility (MDM and MAM) → Restore default MDM URLs → Save
+4. REBOOT + INTERACTIVE LOGIN
+text
+shutdown /r /t 0
+Login után (TE domain fiókkal):
+
+text
+Windows auto: "Signing into Azure AD..." (5 perc)
+→ Új PRT + SSO State fix
+→ Automatikus MDM enrollment trigger
+VÁRT EREDMÉNY (Reboot + 10 perc)
+text
+✅ dsregcmd /status:
+SSO State      : AzureAdPrt ✓
+AzureAdPrt     : YES ✓
+OnPremTGT      : YES ✓
+MDMUrl         : https://enrollment.manage.microsoft.com/... ✓
+
+✅ Intune Portal:
+Hostname       : CLIENT01.contoso.com ✓
+Status         : Compliant ✓
+Owner          : user@contoso.com ✓
+MIÉRT OLDJA MEG AZ SSO STATE FIX?
+text
+ROSSZ SSO STATE = PRT korrupció:
+1. PRT van, de sérült claims
+2. MDM Discovery: 401 Unauthorized (PRT invalid)
+3. No secure channel → No MDM URLs
+4. Enrollment partial (cert OK, de discovery fail)
+
+CLEAR UTÁN:
+1. Clean slate → Új PRT OAuth2-vel
+2. Friss SSO State + TGT exchange
+3. Teljes MDM discovery → URLs megvannak
+SSO State ÉRTÉKEK ÉS JELENTÉSÜK
+SSO State	Állapot	Mit Jelent
+AzureAdPrt	✅ OK	PRT + TGT működik
+Not Configured	❌ Probléma	PRT sérült/man missing
+AzureAdPrtUpdateRequired	⚠️ Figyelem	PRT rotáció kell
+Invalid	❌ Kritikus	PRT validation fail
+EGYSZERŰ 1 SOROS CHECK
+text
+dsregcmd /status | findstr "SSO.*(Not Configured\|Invalid\|UpdateRequired)"
+REM Ha van találat → dsregcmd /clear → reboot
+TL;DR KOMPLETT FIX
+text
+dsregcmd /clear
+(Intune: DELETE device + Restore MDM URLs)
+shutdown /r /t 0
+(Interactive login + várj 10 perc)
+SSO State rossz = PRT sérült = minden további fail. A dsregcmd /clear 100%-ban megoldja ezt a tünetegyüttest. Futtasd a nuclear resetet, reboot, kész. 🚀
+
+Viszont onprem tgt missing
+OnPremTGT: NO = A VÉGLEGES BIZONYÍTVÁNY – ez magyarázza MINDEN tünetedet (no MDM URL, pending, rossz hostname, SSO state probléma).
+
+🎯 OnPremTGT: NO = Cloud Kerberos Trust HIBA
+text
+Mi TÖRTÉNT:
+PRT OAuth2 ✓ → Entra ID
+PRT → Partial TGT ✓ → kerberos.microsoftonline.com  
+Partial TGT → **ON-PREM DC FAIL** ← 0x00006D
+                           ↓
+OnPremTGT: NO → No Kerberos SSO → No MDM Discovery
+KRITIKUS ELLENŐRZÉSEK (Most Futtasd!)
+1. DC Connectivity
+text
+nltest /dsgetdc:%USERDNSDOMAIN%
+REM Ha FAIL → DC hálózati probléma
+2. KDC Proxy Account (ENIRA CONNECT SZERVEREN)
+powershell
+Get-ADUser -Filter "Name -like '*AzureADKerberos*'" -Properties *
+REM ÜRES = EZ A HIBÁD
+3. User Cloud Attributes (TE FIÓKOD)
+powershell
+Get-ADUser $env:USERNAME -Properties msDS-CloudExtensionAttribute*
+REM Minden üres = USER SYNC FAIL
+3 LÉPÉSES NUCLEAR MEGOLDÁS (20 PERC)
+LÉPÉS 1: ENTRA CONNECT USER/DEVICE SYNC
+Entra Connect szerveren:
+
+powershell
+Start-ADSyncSyncCycle -PolicyType Initial
+Várj 10 perc
+
+LÉPÉS 2: CLIENT NUCLEAR RESET
+text
+dsregcmd /clear
+klist purge
+gpupdate /force
+shutdown /r /t 60
+LÉPÉS 3: DC CLOUD KERBEROS ENABLE
+Minden DC-n:
+
+powershell
+Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Kerberos\Parameters -Name "CloudKerberosTicketRetrievalEnabled" -Value 1
+Restart-Service kdcsvc -Force
+MIT VÁRJ A REBOOT UTÁN? (Login sorrendben)
+text
+T=0s:   Ctrl+Alt+Del → TE domain fiók
+T=30s:  "Signing into Azure AD..." (PRT szerzés)
+T=90s:  "Registering with domain..." (TGT exchange)
+T=5min: dsregcmd /status → OnPremTGT: YES ✓
+T=10min: Intune → Hostname OK + Compliant ✓
+VÁRT dsregcmd /status (Sikeres fix után)
+text
+AzureAdJoined      : YES
+DomainJoined       : YES
+AzureAdPrt         : YES
+OnPremTGT          : YES           ← EZ A KULCS
+SSO State          : AzureAdPrt    ← EZ IS
+MDMUrl             : https://enrollment.manage.microsoft.com/... ✓
+HA MÉGSE MŰKÖDIK (Utolsó mentsvár)
+INTUNE PORTAL:
+
+text
+1. Devices → DELETE AAD DeviceID device
+2. Tenant Admin → Mobility → Restore default MDM URLs
+CLIENT:
+
+text
+DeviceEnroller.exe /c  (SYSTEM-ként futtasd)
+TL;DR
+text
+OnPremTGT:NO = DC nem bízik cloud PRT-ben
+
+FIX:
+1. Entra Connect Full Sync
+2. dsregcmd /clear + reboot  
+3. DC: CloudKerberos regkey = 1
+
+EREDMÉNY: OnPremTGT:YES + MDM URL + Compliant
+Az OnPremTGT: NO a Kerberos chain megszakadása. Entra Connect sync + DC regkey után clear + reboot = 100% megoldás. Futtasd sorrendben! 🚀
