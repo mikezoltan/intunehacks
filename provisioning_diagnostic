@@ -1,0 +1,80 @@
+Write-Host "=== INTUNE MDM DIAGNOSZTIKA – Registration Pending okainak feltárása ===" -ForegroundColor Cyan
+
+# 1. PRT / AAD állapot
+Write-Host "`n[1] Azure AD / PRT állapot" -ForegroundColor Yellow
+$ds = dsregcmd /status
+$prt = ($ds | Select-String "AzureAdPrt").ToString().Trim()
+$join = ($ds | Select-String "AzureAdJoined").ToString().Trim()
+$wam = ($ds | Select-String "WamDefaultSet").ToString().Trim()
+Write-Host $join
+Write-Host $prt
+Write-Host $wam
+
+if ($prt -notmatch "YES") {
+    Write-Host "❌ PRT NINCS → MDM sync NEM fog sikerülni (Registration pending marad)" -ForegroundColor Red
+} else {
+    Write-Host "✔ PRT rendben" -ForegroundColor Green
+}
+
+# 2. Intune MDM tanúsítvány
+Write-Host "`n[2] Intune MDM tanúsítvány ellenőrzése" -ForegroundColor Yellow
+$cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.EnhancedKeyUsageList.FriendlyName -match "MS-Organization-Access" }
+if ($cert) {
+    Write-Host "✔ MDM tanúsítvány megtalálva: $($cert.Subject)" -ForegroundColor Green
+} else {
+    Write-Host "❌ NINCS MDM tanúsítvány → Enrollment nem teljes" -ForegroundColor Red
+}
+
+# 3. MDM URL-ek
+Write-Host "`n[3] MDM URL-ek (dsregcmd alapján)" -ForegroundColor Yellow
+$mdmurl = ($ds | Select-String "MDMUrl").ToString().Trim()
+Write-Host $mdmurl
+if ($mdmurl -notmatch "https") {
+    Write-Host "❌ Nincs MDM URL → provisioning NEM tud elindulni" -ForegroundColor Red
+} else {
+    Write-Host "✔ MDM URL OK" -ForegroundColor Green
+}
+
+# 4. DMWAPPUSHSVC állapota
+Write-Host "`n[4] DMWAPPUSHSVC szolgáltatás (OMA-DM agent)" -ForegroundColor Yellow
+$svc = Get-Service dmwappushsvc
+Write-Host "Állapot: $($svc.Status)"
+if ($svc.Status -ne "Running") {
+    Write-Host "❌ DMWAPPUSHSVC nem fut → OMA-DM Sync NEM indulhat el" -ForegroundColor Red
+} else {
+    Write-Host "✔ Szolgáltatás fut" -ForegroundColor Green
+}
+
+# 5. MDM Session Eventek (75 / 76)
+Write-Host "`n[5] OMA-DM Session Eventek keresése (75 = Start, 76 = Complete)" -ForegroundColor Yellow
+$events = Get-WinEvent -LogName "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin" -MaxEvents 200 |
+    Where-Object { $_.Id -in 75, 76 }
+
+$start = $events | Where-Object { $_.Id -eq 75 }
+$end = $events | Where-Object { $_.Id -eq 76 }
+
+if ($start) {
+    Write-Host "✔ Session Start esemény megtalálva" -ForegroundColor Green
+} else {
+    Write-Host "❌ NINCS session start → provisioning nem indult el" -ForegroundColor Red
+}
+
+if ($end) {
+    Write-Host "✔ Session Complete esemény megtalálva" -ForegroundColor Green
+} else {
+    Write-Host "❌ NINCS session complete → Intune NEM kapott provisioning reportot (Pending állapot oka)" -ForegroundColor Red
+}
+
+# 6. Provisioning eredmény
+Write-Host "`n[6] Provisioning eredmény (Event 809/814/773)" -ForegroundColor Yellow
+$prov = Get-WinEvent -LogName "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin" -MaxEvents 300 |
+    Where-Object { $_.Id -in 773, 814, 809 }
+
+if ($prov) {
+    Write-Host "✔ Provisioning események megtalálva" -ForegroundColor Green
+    $prov | Select-Object TimeCreated, Id, LevelDisplayName, Message | Format-Table -AutoSize
+} else {
+    Write-Host "❌ NINCS provisioning result → Registration Pending marad, mert Intune nem kapott visszajelzést" -ForegroundColor Red
+}
+
+Write-Host "`n=== DIAGNOSZTIKA KÉSZ ===" -ForegroundColor Cyan
