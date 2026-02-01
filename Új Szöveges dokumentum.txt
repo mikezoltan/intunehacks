@@ -1,0 +1,258 @@
+Szia! Mit jelen a windows/aad 1271-es megjegyzés
+Szia! A "windows/aad 1271-es megjegyzés" valószínűleg a Windows Azure Active Directory (AAD, ma Microsoft Entra ID) hitelesítési rendszerére utal, ahol a 1271-es kód (vagy AADSTS1271) egy specifikus hibaüzenetet jelöl.
+
+Hibakód jelentése
+Az AADSTS-1271 hiba azt jelenti, hogy a felhasználói fiók letiltásra került (user account is locked), jellemzően túl sok sikertelen bejelentkezési kísérlet miatt biztonsági okokból. Ez megakadályozza a további hozzáférést, amíg a fiókot feloldják.
+​
+
+Okok és megoldás
+Okok: Ismételt rossz jelszó megadása, gyanús tevékenység vagy adminisztrátori beavatkozás.
+​
+
+Megoldás: Várj a rendszer által meghatározott időtartamig (pl. 15 perc), vagy kérd meg a szervezet rendszergazdáját a fiók feloldására a Microsoft Entra admin portálon keresztül. Ha Microsoft-fiók, próbáld a fiók biztonsági visszaállítást.
+​
+
+On-prem tgt is missing az üzenet
+Szia! Az "On-prem TGT is missing" hibaüzenet a Windows Azure AD (Microsoft Entra ID) naplókban (pl. Event ID 1241) azt jelzi, hogy hiányzik az on-premises Ticket Granting Ticket (TGT), ami a Kerberos-alapú hitelesítés kulcsa a helyi (on-prem) Active Directory erőforrásokhoz való hozzáféréshez.
+​
+
+Okok
+Ez jellemzően Azure AD Join gépeken jelentkezik hibrid környezetben, ahol nincs megfelelő Kerberos konfiguráció. Például: hiányzik a Azure AD Kerberos Server telepítése, nincs vonalnézet (line-of-sight) a Domain Controllerekre, vagy hálózati/DNS-problémák akadályozzák a TGT kérelmet.
+
+Megoldások
+Telepítsd a Azure AD Kerberos Server-t Azure-ban (lásd Microsoft doksit WHB-hez hasonlóan).
+​
+
+Ellenőrizd a dsregcmd /status kimenetet: nézd az "OnPremTGT: yes/no" állapotot és Kerberos kapcsolódást.
+
+Győződj meg róla, hogy a gép eléri a DC-ket (ping, portok: 88, 445 stb.), és a UPN szinkronizálva van.
+​
+
+Windows 11-en gyakran jobban működik, mint Win10-en; próbáld újraindítani vagy újratelepíteni a gépet.
+​
+
+Dsregcmd /statusban on pren tgt:no az üzenet
+Szia! A dsregcmd /status parancs kimenetében az OnPremTgt: NO azt jelenti, hogy a gépen nincs on-premises Kerberos Ticket Granting Ticket (TGT) a bejelentkezett felhasználó számára a helyi Active Directory erőforrásokhoz való hozzáféréshez.
+
+Mit jelent pontosan
+Ez a Cloud Kerberos trust konfigurációban fordul elő, ahol a gép Azure AD Join (vagy Hybrid Join) állapotú, de nem tudja beszerezni a Kerberos jegyet az on-prem DC-khez. Korábban (Windows 11 23H2 előtt) ez CloudTGT néven szerepelt.
+
+Gyakori okok
+Nincs beállítva a Cloud Kerberos trust (Azure AD Kerberos Server hiányzik).
+
+Hálózati probléma: a gép nem éri el a Domain Controllereket (nincs "line-of-sight", portok 88, 445 stb.).
+
+UPN szinkronizációs hiba vagy rossz DNS-beállítás.
+
+Javítási lépések
+Futtasd: dsregcmd /status /debug további részletekért (nézd Kerberos szekciót).
+
+Állítsd be a Cloud Kerberos-t a Microsoft Entra admin portálon.
+​
+
+Ellenőrizd: nltest /dsgetdc:<domain>, ping DC-ket, és nézd Event Viewer-t (1102/1241 események).
+​
+
+Kapcsolódó
+
+Hogyan szerezzek OnPremTgt YES állapotot
+
+Mi a Cloud Kerberos trust konfigurálása
+
+Dsregcmd /status egyéb hibák javítása
+
+Windows 11 23H2 OnPremTgt változásai
+
+Hogyan diagnosztizáljam Kerberos problémákat Entra ID-ben
+A dsregcmd /clear parancs admin, vagy usermode?
+Szia! A dsregcmd /clear parancs adminisztrátori (elevated) módban kell futtatni.
+
+Jogosultságok részletezése
+text
+┌─────────────────────┬──────────────┬─────────────────────┐
+│ Parancs             │ User         │ Admin (Run as Admin)│
+├─────────────────────┼──────────────┼─────────────────────┤
+│ dsregcmd /status    │ ✅ Részleges │ ✅ Teljes           │
+│ dsregcmd /debug     │ ❌ Hiba      │ ✅ Teljes           │
+│ dsregcmd /clear     │ ❌ Hiba      │ ✅ Sikeres          │
+│ dsregcmd /leave     │ ❌ Hiba      │ ✅ Sikeres          │
+└─────────────────────┼──────────────┼─────────────────────┘
+Miért kell admin jog?
+A /clear a következőket módosítja:
+
+text
+❌ HKLM\SOFTWARE\Microsoft\IdentityCRL → SYSTEM kulcsok
+❌ HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CDJ → Device join
+❌ HKLM\SOFTWARE\Microsoft\Enrollments → MDM enrollment  
+❌ C:\ProgramData\Microsoft\IdentityCRL → Fájlok törlése
+User módban csak HKCU-t írhat, HKLM-hoz elevated CMD/PowerShell kell.
+
+Hogyan futtasd helyesen?
+text
+:: 1. Jobb klikk Start → Windows PowerShell (Admin) 
+:: 2. Vagy CMD (Admin)
+dsregcmd /clear
+
+:: Várt kimenet:
+Status Success
+/clear vs /leave vs /clean
+Parancs	Jogosultság	Hatása
+/clear	Admin	PRT cache törlés (IdentityCRL)
+/leave	Admin	Azure AD unjoin + PRT törlés
+/clean	SYSTEM	Minden Azure AD cache (nem hivatalos)
+Gyakorlati példa
+text
+1. Win+R → cmd → Ctrl+Shift+Enter → OK
+2. dsregcmd /status                    # Ellenőrizd előtte
+3. dsregcmd /clear                     # Töröl (PRT cache)
+4. dsregcmd /status                    # Értesítés: Cleared
+5. Lock/Unlock → PRT újragenerálás     # Utána
+/clear után a PRT újra generálódik a következő lock/unlock vagy újraindításkor, így orvosolhatók a "PRT stuck" problémák!
+
+Intune pending enrollment status szempontjából mit jelent a graph elérés?
+Szia! Az Intune "Pending enrollment" szempontjából a Graph elérés azt jelenti, hogy a kliensgép Microsoft Graph API-n keresztül próbálja lekérdezni a felhasználó Intune compliance állapotát és policy-kat, de ez elakad.
+
+Mi történik pontosan?
+text
+1. Enrollment elkezdődik → MDM cert OK
+2. PRT megvan → Graph API hívás:
+   POST https://graph.microsoft.com/v1.0/me/managedDevices
+   Scope: DeviceManagementManagedDevices.Read.All
+   
+3. Graph válasza alapján dönt:
+   ✅ Compliant → Enrollment folytatódik → Succeeded
+   ❌ Non-compliant → Block → Rollback/Pending
+   ⏳ Timeout → Pending forever
+Miért marad Pending?
+text
+Graph hívás eredményei:
+1. HTTP 403: Nincs Graph scope a PRT-ben → Pending
+2. HTTP 404: Device még nincs szinkronizálva → Pending  
+3. HTTP 500: Intune backend hiba → Pending
+4. NO Graph response → Timeout → Pending (24h+)
+Graph elérés ellenőrzése
+text
+# 1. dsregcmd kimenet keresd:
+GraphConnectionPoint: https://graph.microsoft.com/
+GraphLastAuthTime: [friss dátum kell]
+
+# 2. Network trace (Fiddler):
+graph.microsoft.com/v1.0/me/managedDevices → 200 OK kell
+
+# 3. Intune Portal:
+Devices > [Device] > Sync → 5 perc várakozás
+Gyors diagnózis
+text
+# SYSTEM módban (psexec -i -s cmd):
+dsregcmd /status /debug | findstr "Graph|Compliance|ManagedDevices"
+
+PÉLDA OK:
+GraphComplianceCheckUrl : https://graph.microsoft.com/beta/deviceManagement/managedDevices
+DeviceComplianceState  : compliant
+
+PÉLDA HIÁNYZIK/ROSSZ:
+GraphConnectionPoint  : (üres vagy error)
+DeviceComplianceState : notEvaluated → PENDING!
+Javítás
+text
+1. Intune Portal > Devices > [Device ID] > Sync (kézzel)
+2. Endpoint Manager > Reports > Device Compliance > keresd a gépet
+3. Ha "Pending" → Policies > Assignments > Exclude ideiglenesen
+4. Gépen: dsregcmd /clear → Lock/Unlock → Új PRT + Graph hívás
+Miért kritikus a Graph?
+text
+Pending enrollment = Graph compliance NEM elérhető
+↓
+Intune nem tudja értékelni → ESP blokkol → Rollback
+↓
+Folyamatos retry loop → RPC exhaustion → Teljes deadlock
+A Graph a "kapuőr": Ha ez nem működik, az enrollment soha nem lesz "Succeeded", bármilyen előtte lévő lépés (PRT, MDM cert) stimmel is! Ellenőrizd először a dsregcmd /status-ban a Graph részt.
+
+Az eventviewerben a graph hivások eredményi hol érhetőek el?
+Szia! A Graph hívások eredményei az Event Viewerben elsősorban ezekben a naplókban érhetők el:
+
+Fő naplók Graph hívásokhoz
+1. Microsoft-Windows-AAD\Operational ⭐ LEGfontosabb
+text
+Applications and Services Logs → Microsoft → Windows → AAD → Operational
+Keresd Event ID-kat:
+
+1101: PRT + Graph auth sikeres
+
+1104: Graph API hiba (403/404/500)
+
+304: Enterprise PRT + Graph compliance hiba
+
+text
+Példa hiba:
+Event ID 1104
+"Failed to refresh PRT. ServerErrorCode: 0xCAA9001E"
+Graph URL: https://graph.microsoft.com/v1.0/me/managedDevices
+HTTP Status: 403 Forbidden
+2. Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider\Admin
+text
+→ DeviceManagement-Enterprise-Diagnostics-Provider → Admin
+Graph compliance hívások:
+
+Event ID 814: Graph compliance check sikertelen
+
+Event ID 404: Device compliance Graph timeout
+
+text
+Példa:
+"Graph compliance check failed: The remote server returned 404"
+3. Microsoft-Windows-Diagnostics-Networking/Operational
+text
+→ Diagnostics-Networking → Operational
+Graph hálózati szintű hibák:
+
+DNS resolution: graph.microsoft.com
+
+TCP connect: Port 443
+
+TLS handshake hibák
+
+Gyors keresés parancsok
+powershell
+# Graph-specifikus események (Admin PowerShell)
+Get-WinEvent -LogName "Microsoft-Windows-AAD/Operational" | 
+?{$_.Id -in 1101,1104,304 -and $_.Message -match "graph|Graph|compliance"} | 
+Select TimeCreated,Id,@{Name="Error";Expression={$_.Message}} | 
+Sort TimeCreated -Desc | Select -First 10
+powershell
+# DeviceManagement Graph hibák
+Get-WinEvent -LogName "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin" | 
+?{$_.Message -match "graph|Graph|compliance|managedDevices"} | 
+fl TimeCreated,Id,Message | More
+Mire figyelj a Graph eseményekben?
+text
+✅ SIKERES Graph hívás:
+Event ID: 1101
+"Successfully refreshed PRT and obtained Graph access token"
+ComplianceState: compliant
+
+❌ HIBA Graph hívás:
+Event ID: 1104/814
+HTTP 403 → Nincs Graph scope a PRT-ben
+HTTP 404 → Device még nincs Intune-ban szinkronizálva  
+HTTP 500 → Intune backend hiba
+Intune Pending összefüggés
+text
+Graph hívás sikertelen → Event 1104/814 → 
+↓
+ComplianceState: notEvaluated → 
+↓
+Enrollment Status: PENDING → ESP blokk → Rollback
+Kezdd az AAD\Operational naplóval – itt látod pontosan, hogy a Graph miért nem elérhető (network/proxy/scope/timeout), ez okozza a Pending stuck állapotot!
+
+Kapcsolódó
+
+Melyik Event ID jelzi a Graph hívás sikertelenségét Intune enrollmentben
+
+Hogyan szűrjek Graph hibákat az Event Viewerben
+
+Microsoft Graph activity logs hol érhetőek el Azure-ban
+
+PRT generálás Graph hívásai milyen naplóban látszanak
+
+Dsregcmd debug output Graph eredményeket mutat-e
