@@ -1,0 +1,101 @@
+PRT hibaelhárítás hybrid join esetén Intune-ban
+Szia! A PRT hibaelhárítás Hybrid Azure AD Join esetén lépésről lépésre, Intune kontextusban.
+
+1. PRT állapot diagnosztizálása
+text
+dsregcmd /status /debug
+Keresendő értékek:
+
+text
+SSO State:
+  AzureAdPrt              : YES/NO        ← Alap PRT
+  EnterprisePrt           : YES/NO        ← Hybrid PRT
+  AzureAdPrtUpdateTime    : [dátum]       ← Frissítve 4 órán belül?
+  AzureAdPrtAuthState     : 0x3F          ← Teljes hybrid: 0x2F+0x10
+  AttemptState            : SUCCESS/ERROR ← Utolsó kísérlet
+2. Gyakori PRT hibák + okok
+Hiba	dsregcmd kimenet	Ok
+AzureAdPrt: NO	AttemptState: ERROR (0xCAA5001E)	Network/DNS → login.microsoftonline.com
+EnterprisePrt: NO	AuthState: 0x2F (csak cloud)	Hybrid Join sync hiba / msDS-KeyCredentialLink üres
+PRT régi (>4h)	AzureAdPrtUpdateTime régi	Lock/unlock trigger nem működik
+PRT corrupt	ERROR_PROCESS_ABORTED	Intune non-compliant → PRT letiltva
+3. Hibaelhárítási fázisok
+A. Alap ellenőrzések
+text
+# 1. Hybrid Join OK?
+dsregcmd /status | findstr "AzureAdJoined DomainJoined"
+→ Kell: AzureAdJoined: YES + DomainJoined: YES
+
+# 2. Network
+nslookup login.microsoftonline.com
+nslookup EnterpriseEnrollment.<domain>.com
+Test-NetConnection login.microsoftonline.com -Port 443
+
+# 3. Event log
+Get-WinEvent -LogName "Microsoft-Windows-AAD/Operational" | ? Id -in 1101,1104,304
+B. Azure AD Connect Sync
+Entra Portal:
+
+text
+Azure AD Connect > Synchronization > Devices filter
+→ Computer objektum: msDS-KeyCredentialLink populated?
+→ Device Writeback: Enabled?
+→ Force Delta Sync
+C. PRT Force Refresh
+text
+# 1. Lock/unlock kézzel
+rundll32.exe keymgr.dll, KRShowKeyMgr
+
+# 2. Ngc PRT cleanup
+dsregcmd /clean
+del /f /s "C:\ProgramData\Microsoft\IdentityCRL\AAD\*"
+gpupdate /force
+Restart-Computer
+D. Intune Compliance blokkolás
+Intune Portal:
+
+text
+Devices > [Device] > Compliance status: Compliant?
+→ Ha Non-Compliant → Policies > Assignments > Exclude device/user ideiglenesen
+→ Sync device → várj 5p → ellenőrizd PRT
+4. Speciális hibák + gyorsjavítás
+Event ID 304: "Enterprise PRT unavailable"
+text
+Ok: msDS-KeyCredentialLink üres Azure AD Connect sync hiba
+Javítás:
+1. AD Connect > Connectors > AD > Re-run sync
+2. Entra ID > Devices > Delete duplicate objects
+3. Gépen: dsregcmd /leave → reboot → /join
+0xCAA5001E: PRT request failed
+text
+Ok: Proxy/Firewall blokkolja
+Javítás:
+winhttp show-proxy
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\Connections" -Name DefaultConnectionSettings -Value ([byte[]](...)
+PRT stuck >4 óra
+text
+Javítás:
+schtasks /run /tn "\Microsoft\Windows\Workplace Join\Automatic-Device-Join"
+dsregcmd /status  # 5 perc múlva ellenőrizd
+5. Validációs checklist
+text
+☑ dsregcmd /status:
+  [x] AzureAdPrt: YES
+  [x] EnterprisePrt: YES  
+  [x] AuthState: 0x3F
+  [x] OnPremTgt: YES
+☑ klist tgt → On-prem Kerberos ticket
+☑ Intune: Devices > Compliance: Compliant
+☑ Event log: No 1104/304 errors (24h)
+6. Ha semmi sem segít - Nuclear option
+powershell
+# Teljes wipe
+dsregcmd /leave
+Remove-Item "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CDJ" -Recurse -Force
+Remove-Item "HKLM:\SOFTWARE\Microsoft\IdentityCRL" -Recurse -Force
+Remove-Item "HKLM:\SOFTWARE\Microsoft\Enrollments" -Recurse -Force
+gpupdate /force
+Restart-Computer
+A PRT 4 órán belül megújul, ha minden előfeltétel stimmel (Hybrid Join + Intune compliance + Network). Ellenőrizd először a dsregcmd /status-t, ez 90%-ban megadja a hibát!
+
+dsregcmd /status /debug Ezt system joggal hogyn tudom futtatni?
