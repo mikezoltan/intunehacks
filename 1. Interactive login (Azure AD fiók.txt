@@ -1,0 +1,94 @@
+1. Interactive login (Azure AD fiókkal)
+text
+Winlogon → Ctrl+Alt+Del → user@contoso.com → jelszó
+↓
+NgcCbs (Credential UI) → WebAuthN/AAD Broker → MS-Organization-Config
+2. Device Check + Tenant Discovery
+text
+1. Helyi cache ellenőrzés:
+   HKCU\SOFTWARE\Microsoft\IdentityCRL\TokenBrokerCache
+
+2. Ha nincs érvényes PRT → Device regisztráció ellenőrzés:
+   dsregcmd /status → AzureAdJoined: YES
+   
+3. Tenant discovery (SCP-ből):
+   HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CDJ\AAD
+   TenantId: "12345678-1234-1234-1234-123456789abc"
+3. OAuth2 Device Authorization Flow
+text
+URL: https://login.microsoftonline.com/[tenantId]/oauth2/v2.0/authorize
+Params:
+  ?client_id=76cdec26-b34e-4ae6-bd0d-77afec6eeabf  (Windows Auth Broker)
+  &response_type=code
+  &redirect_uri=ms-appx-web://microsoft.aad.brokerplugin/[deviceId]
+  &scope=https://graph.microsoft.com/User.Read
+  &device=[deviceId]
+4. PRT Request (Device Code Flow)
+text
+POST https://login.microsoftonline.com/[tenantId]/oauth2/v2.0/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:device_code
+client_id=76cdec26-b34e-4ae6-bd0d-77afec6eeabf
+device_code=[long_device_code]
+Válasz JSON:
+
+json
+{
+  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6...",
+  "refresh_token": "M.R3_BAY.[LONG_PRT_TOKEN]",
+  "id_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6...",
+  "token_type": "Bearer",
+  "expires_in": 3599
+}
+5. PRT Validáció + Tárolás
+text
+Ngctoken.exe (PRT validátor):
+1. KPubKey lekérés: https://login.microsoftonline.com/[tenantId]/discovery/v2.0/keys?p=[pubkeyId]
+2. RSA aláírás ellenőrzése
+3. Device compliance ellenőrzés (Intune)
+
+Sikeres validáció → Tárolás:
+- HKLM\SOFTWARE\Microsoft\IdentityCRL\StoredIdentities\[SID]\[UPN]
+  UPN: user@contoso.com
+  Sid: S-1-12-1-1234567890-1234567890-1234567890
+  AuthState: 0x2F (PRT + DeviceReg)
+  LastSync: 2026-02-01T15:46:00Z
+  
+- Fájl: C:\ProgramData\Microsoft\IdentityCRL\AAD\[TOKEN_HASH].tok
+6. PRT használata további autentikációhoz
+text
+On-demand token generálás:
+TokenBroker → NgcCbs → PRT → Refresh Token Request
+
+POST https://login.microsoftonline.com/[tenantId]/oauth2/v2.0/token
+grant_type=refresh_token
+refresh_token=[PRT extract]
+scope=https://graph.microsoft.com/.default
+Cél szolgáltatások:
+
+text
+https://graph.microsoft.com/User.Read          → Intune compliance
+https://autologon.microsoftazuread-sid.net/    → Seamless SSO  
+https://cloudkerberos.microsoftonline.com/     → Cloud Kerberos TGT
+Ellenőrzés parancsok
+text
+# PRT állapot
+dsregcmd /status /debug | findstr "PRT|AuthState"
+
+# Tárolt PRT-k
+dir "C:\ProgramData\Microsoft\IdentityCRL\AAD"
+
+# Aktív TGT/PRT
+klist tgt
+klist prt  (Win11 24H2+)
+
+# PRT cleanup
+dsregcmd /clean
+Hibák ezen a fázison
+text
+Event ID 1104 (AAD\Operational): PRT request failed → Network/DNS
+Event ID 906: PRT validation failed → Device non-compliant
+OnPremTgt: NO → PRT van, de Cloud Kerberos nincs configolva
+A PRT 90 napig érvényes, utána csendes refresh történik (90 naponta PRT rotáció). Ez a kulcsa minden további automatikus autentikációnak!
+
