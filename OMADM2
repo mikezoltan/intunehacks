@@ -1,0 +1,262 @@
+Add-Type -AssemblyName PresentationFramework
+
+# === GUI Window ===
+$window = New-Object System.Windows.Window
+$window.Title = "PRT Recovery Orchestrator – ULTIMATE EDITION (Federated AD)"
+$window.Width = 720
+$window.Height = 700
+$window.WindowStartupLocation = "CenterScreen"
+
+$grid = New-Object System.Windows.Controls.Grid
+$window.Content = $grid
+
+# === Log Box ===
+$logBox = New-Object System.Windows.Controls.TextBox
+$logBox.Margin = "10,10,10,260"
+$logBox.Height = 410
+$logBox.VerticalScrollBarVisibility = "Auto"
+$logBox.TextWrapping = "Wrap"
+$logBox.IsReadOnly = $true
+$logBox.Background = [System.Windows.Media.Brushes]::LightGray
+$grid.Children.Add($logBox)
+
+function Log($msg) {
+    $timestamp = Get-Date -Format "HH:mm:ss"
+    $logBox.AppendText("[$timestamp] $msg`n")
+    $logBox.ScrollToEnd()
+}
+
+# === Buttons container ===
+$stack = New-Object System.Windows.Controls.StackPanel
+$stack.Orientation = "Vertical"
+$stack.Margin = "10,430,10,10"
+$grid.Children.Add($stack)
+
+# === HELPER FUNCTIONS ===
+function Get-PRTInfo {
+    $status = dsregcmd /status
+    return @{
+        PRT = ($status | Select-String "PRT|AzureAdPrt").ToString()
+        MDM = ($status | Select-String "MdmUrl").ToString()
+        DISC = ($status | Select-String "DiscoveryService").ToString()
+        FED  = ($status | Select-String "FederationInformation").ToString()
+    }
+}
+
+function Check-IME {
+    try {
+        $svc = Get-Service -Name IntuneManagementExtension -ErrorAction Stop
+        return "IME: $($svc.Status)"
+    } catch {
+        return "IME NINCS telepítve"
+    }
+}
+
+function Check-CDJ {
+    $cdjKeys = Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Enrollments\CDJ\" -ErrorAction SilentlyContinue
+    if (-not $cdjKeys) { return "❌ CDJ registry HIÁNYZIK" }
+    
+    foreach ($key in $cdjKeys) {
+        $cdj = Get-ItemProperty $key.PSPath
+        if ($cdj.DiscoveryServiceFullURL -and $cdj.DiscoveryServiceFullURL -match "enterpriseregistration\.windows\.net") {
+            return "✅ CDJ Discovery: $($cdj.DiscoveryServiceFullURL)"
+        }
+    }
+    return "❌ CDJ Discovery HIBÁS/ÜRES"
+}
+
+# === BUTTONS ===
+
+# 1. Alap PRT + MDM ellenőrzés
+$btnCheckPRT = New-Object System.Windows.Controls.Button
+$btnCheckPRT.Content = "🔍 1. PRT + MDM + CDJ + IME ellenőrzés"
+$btnCheckPRT.Height = 42
+$btnCheckPRT.Background = [System.Windows.Media.Brushes]::LightBlue
+$stack.Children.Add($btnCheckPRT)
+
+$btnCheckPRT.Add_Click({
+    Log "`n=== 🏥 TELJES DIAGNOSZTIKA ==="
+    $info = Get-PRTInfo
+    $ime = Check-IME
+    $cdj = Check-CDJ
+    
+    Log "PRT: $($info.PRT)"
+    Log "MDM URL: $($info.MDM)"
+    Log "Discovery: $($info.DISC)"
+    Log $cdj
+    Log "IME: $ime"
+    Log "Federated: $($info.FED)"
+})
+
+# 2. MFA PRT generálás (1241 workaround)
+$btnMFA = New-Object System.Windows.Controls.Button
+$btnMFA.Content = "🔑 2. MFA PRT generálás (1241 TGT bypass)"
+$btnMFA.Height = 42
+$btnMFA.Background = [System.Windows.Media.Brushes]::LightGreen
+$stack.Children.Add($btnMFA)
+
+$btnMFA.Add_Click({
+    Log "`n=== 🔑 INTERAKTÍV PRT GENERÁLÁS (1241 WORKAROUND) ==="
+    Log "VPN ki/be kapcsolása HA kell!"
+    Start-Process "https://portal.azure.com/#blade/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/Devices"
+    Log "👉 BEJELENTKEZÉS federated fiókkal + MFA!"
+    Log "👉 60s várakozás → 1. gomb újra!"
+    Log "Interactive PRT KERÜLI WS-Trust/TGT hibát!"
+})
+
+# 3. OMADM teljes sync
+$btnOMADM = New-Object System.Windows.Controls.Button
+$btnOMADM.Content = "🔄 3. OMADM Restart + Device Validation"
+$btnOMADM.Height = 42
+$btnOMADM.Background = [System.Windows.Media.Brushes]::LightYellow
+$stack.Children.Add($btnOMADM)
+
+$btnOMADM.Add_Click({
+    Log "`n=== 🔄 OMADM + DEVICE VALIDATION ==="
+    
+    # dmwappushsvc restart
+    $svc = Get-Service -Name dmwappushsvc -ErrorAction SilentlyContinue
+    if ($svc) {
+        if ($svc.Status -eq "Running") { Stop-Service dmwappushsvc -Force }
+        Start-Service dmwappushsvc
+        Log "✅ dmwappushsvc újraindítva"
+    }
+    
+    # Synchronize spam
+    $namespace = "root\cimv2\mdm\dmmap"
+    $class = "MDM_EnterpriseModernAppManagement_AppManagement01"
+    for ($i=0; $i -lt 3; $i++) {
+        try {
+            $cim = Get-CimInstance -Namespace $namespace -ClassName $class -ErrorAction Stop
+            Invoke-CimMethod -InputObject $cim -MethodName "Synchronize" | Out-Null
+            Log "✅ Sync #$i sikeres!"
+            break
+        } catch {
+            Log "⚠️ Sync #$i failed (normal ha CDJ nincs)"
+        }
+        Start-Sleep 3
+    }
+})
+
+# 4. Auto retry (20 ciklus)
+$btnRetry = New-Object System.Windows.Controls.Button
+$btnRetry.Content = "🔄 4. Auto Retry (20x30s = 10perc)"
+$btnRetry.Height = 42
+$btnRetry.Background = [System.Windows.Media.Brushes]::Orange
+$stack.Children.Add($btnRetry)
+
+$btnRetry.Add_Click({
+    Log "`n=== 🤖 AUTOMATIKUS RETRY (10 PERC) ==="
+    for ($i = 1; $i -le 20; $i++) {
+        Log "`n--- Ciklus #$i/20 ---"
+        $info = Get-PRTInfo
+        $cdj = Check-CDJ
+        
+        Log "PRT: $($info.PRT)"
+        Log "MDM: $($info.MDM)"
+        Log $cdj
+        
+        # SIKER feltétel
+        if ($info.PRT -match "YES" -and $info.MDM -match "http" -and $cdj -match "✅") {
+            Log "🎉 KÉSZ! Minden OK → LEÁLL!"
+            Invoke-CimMethod -Namespace "root\cimv2\mdm\dmmap" -ClassName "MDM_EnterpriseModernAppManagement_AppManagement01" -MethodName "Synchronize"
+            break
+        }
+        
+        # OMADM sync minden körben
+        try {
+            $cim = Get-CimInstance -Namespace "root\cimv2\mdm\dmmap" -ClassName "MDM_EnterpriseModernAppManagement_AppManagement01"
+            Invoke-CimMethod -InputObject $cim -MethodName "Synchronize" | Out-Null
+        } catch {}
+        
+        Start-Sleep 30
+    }
+})
+
+# 5. RPC Reset (svchost/deviceenroller)
+$btnRPC = New-Object System.Windows.Controls.Button
+$btnRPC.Content = "🛠️ 5. RPC Reset (svchost/deviceenroller)"
+$btnRPC.Height = 42
+$btnRPC.Background = [System.Windows.Media.Brushes]::LightCoral
+$stack.Children.Add($btnRPC)
+
+$btnRPC.Add_Click({
+    Log "`n=== 🛠️ RPC KIMERÜLÉS JAVÍTÁS ==="
+    
+    # RPC szolgáltatások
+    @("RpcSs", "RpcEptMapper") | ForEach {
+        Restart-Service $_ -Force -ErrorAction SilentlyContinue
+        Log "Restart: $_"
+    }
+    
+    # svchost (OMADM) kill
+    Get-Process svchost | Where-Object { $_.Modules.FileName -like "*dmwappush*" } | Stop-Process -Force
+    Log "OMADM svchost reset"
+    
+    # deviceenroller cleanup
+    Stop-Process deviceenroller -ErrorAction SilentlyContinue
+    Log "deviceenroller cleanup"
+    
+    Log "✅ RPC reset kész → 30s várj!"
+})
+
+# 6. CDJ Registry ellenőrzés
+$btnCDJ = New-Object System.Windows.Controls.Button
+$btnCDJ.Content = "📋 6. CDJ Registry + Discovery URL Check"
+$btnCDJ.Height = 42
+$btnCDJ.Background = [System.Windows.Media.Brushes]::Plum
+$stack.Children.Add($btnCDJ)
+
+$btnCDJ.Add_Click({
+    Log "`n=== 📋 CDJ REGISTRY DIAGNOSZTIKA ==="
+    $cdjKeys = Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Enrollments\CDJ\" -ErrorAction SilentlyContinue
+    if (-not $cdjKeys) {
+        Log "❌ CDJ registry HIÁNYZIK → MFA PRT kell!"
+        return
+    }
+    
+    foreach ($key in $cdjKeys) {
+        $cdj = Get-ItemProperty $key.PSPath
+        Log "GUID: $($key.PSChildName)"
+        Log "Discovery: $($cdj.DiscoveryServiceFullURL)"
+        if ($cdj.DiscoveryServiceFullURL -notmatch "enterpriseregistration\.windows\.net") {
+            Log "❌ HIBÁSBAN! Törlés + MFA kell"
+        }
+    }
+})
+
+# 7. Clear log
+$btnClear = New-Object System.Windows.Controls.Button
+$btnClear.Content = "🗑️ Napló törlése"
+$btnClear.Height = 35
+$btnClear.Background = [System.Windows.Media.Brushes]::Silver
+$stack.Children.Add($btnClear)
+
+$btnClear.Add_Click({ $logBox.Clear(); Log "🗑️ Napló törölve" })
+
+# 8. Export log
+$btnExport = New-Object System.Windows.Controls.Button
+$btnExport.Content = "💾 Napló export (Desktop)"
+$btnExport.Height = 35
+$btnExport.Background = [System.Windows.Media.Brushes]::LightGray
+$stack.Children.Add($btnExport)
+
+$btnExport.Add_Click({
+    $logPath = "$env:USERPROFILE\Desktop\PRT_Recovery_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+    $logBox.Text | Out-File $logPath -Encoding UTF8
+    Log "💾 Export: $logPath"
+})
+
+# === STARTUP MESSAGE ===
+Log "🚀 PRT Recovery Orchestrator – ULTIMATE EDITION betöltve!"
+Log "🇭🇺 Minden enrollment probléma (1241, RPC, CDJ, IME) egy helyen!"
+Log ""
+Log "📋 HASZNÁLATI SORREND:"
+Log "1️⃣ 🔍 TELJES DIAGNOSZTIKA"
+Log "2️⃣ 🔑 MFA PRT (1241 workaround)" 
+Log "3️⃣ 🔄 OMADM SYNC"
+Log "4️⃣ 🔍 ELLENŐRZÉS (PRT YES + CDJ OK?)"
+Log "5️⃣ 🤖 AUTO RETRY vagy manuális sync"
+Log ""
+
+$window.ShowDialog() | Out-Null
