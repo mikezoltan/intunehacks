@@ -1,0 +1,49 @@
+✅ 1. LÉPÉS — Menj a Conditional Access felületére
+Azure Portal →
+Azure Active Directory → Protection → Conditional Access
+
+✅ 2. LÉPÉS — Új policy létrehozása
+Kattints:
++ New policy
+Adj neki nevet, pl.
+Force-MFA-For-Device-PRT-Repair
+
+✅ 3. LÉPÉS — Felhasználók kiválasztása
+Assignments → Users → Select users → válaszd ki azt a felhasználót, aki az enrolmentet végzi.
+⚠ NE állítsd Everyone‑re!
+Csak a hibás eszközt kezelő usert válaszd ki.
+
+✅ 4. LÉPÉS — Cloud app kiválasztása (ez a kritikus pont!)
+A CA akkor kényszeríti ki a teljes értékű MFA‑t, ha a user egy olyan appot használ, ami Azure AD token alapján fut.
+A legjobbak:
+🔹 Microsoft Azure Management
+(vagy)
+🔹 Microsoft Graph
+Ezek mindig új Authenticator MFA-t kérnek, ha nincs friss token.
+➡ Select → Cloud apps → Include → Select apps → keresd: “Microsoft Azure Management”
+Ez a titkos összetevő.
+Ez fogja „rákényszeríteni” a frissített PRT-t.
+
+✅ 5. LÉPÉS — Grant → Require MFA
+Assignments → Grant
+Jelöld be:
+✔ Require multi-factor authentication
+Más ne legyen bepipálva.
+
+✅ 6. LÉPÉS — Session (opcionális)
+Itt BÁRHOGY beállíthatod, de nem kötelező.
+Sok admin beállítja:
+
+Sign-in frequency = 1 hour
+hogy gyorsabban kikényszerüljön.
+
+
+✅ 7. LÉPÉS — Enable the policy
+ON állásba teszed → Create.
+
+🎬 8. LÉPÉS — Triggereld az MFA-t a kliens gépen
+A kliens gépről:
+
+Nyisd meg a https://portal.azure.com oldalt
+Jelentkezz be ugyanazzal a userrel
+Rögtön ki fogja kényszeríteni az Authenticator MFA-t
