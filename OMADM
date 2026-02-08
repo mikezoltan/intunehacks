@@ -156,4 +156,4 @@ $btnRetry.Add_Click({
     }
 })
 
-$window.ShowDialog() | Out-Null Ellenőrizd a scriptet, és jelezd ha nem logol sehova
+$window.ShowDialog() | Out-Null
