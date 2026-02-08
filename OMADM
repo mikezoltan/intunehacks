@@ -1,0 +1,159 @@
+Add-Type -AssemblyName PresentationFramework
+
+# === GUI Window ===
+$window = New-Object System.Windows.Window
+$window.Title = "PRT Recovery Orchestrator – Extended Edition"
+$window.Width = 680
+$window.Height = 640
+$window.WindowStartupLocation = "CenterScreen"
+
+$grid = New-Object System.Windows.Controls.Grid
+$window.Content = $grid
+
+# === Log Box ===
+$logBox = New-Object System.Windows.Controls.TextBox
+$logBox.Margin = "10,10,10,220"
+$logBox.Height = 360
+$logBox.VerticalScrollBarVisibility = "Auto"
+$logBox.TextWrapping = "Wrap"
+$logBox.IsReadOnly = $true
+$grid.Children.Add($logBox)
+
+function Log($msg) {
+    $logBox.AppendText("$msg`n")
+    $logBox.ScrollToEnd()
+}
+
+# === Buttons container ===
+$stack = New-Object System.Windows.Controls.StackPanel
+$stack.Orientation = "Vertical"
+$stack.Margin = "10,380,10,10"
+$grid.Children.Add($stack)
+
+# Buttons
+$btnCheckPRT = New-Object System.Windows.Controls.Button
+$btnCheckPRT.Content = "PRT + MDM URL ellenőrzése"
+$btnCheckPRT.Height = 40
+
+$btnMFA = New-Object System.Windows.Controls.Button
+$btnMFA.Content = "MFA indítása (Azure Portal)"
+$btnMFA.Height = 40
+
+$btnOMADM = New-Object System.Windows.Controls.Button
+$btnOMADM.Content = "OMADM Restart + Sync"
+$btnOMADM.Height = 40
+
+$btnRetry = New-Object System.Windows.Controls.Button
+$btnRetry.Content = "Automatikus Retry (30s ciklus)"
+$btnRetry.Height = 40
+
+$stack.Children.Add($btnCheckPRT)
+$stack.Children.Add($btnMFA)
+$stack.Children.Add($btnOMADM)
+$stack.Children.Add($btnRetry)
+
+# === FUNCTIONS ===
+
+function Get-PRTInfo {
+    $status = dsregcmd /status
+    return @{
+        PRT = ($status | Select-String "PRT Status").ToString()
+        MDM = ($status | Select-String "MdmUrl").ToString()
+        DISC = ($status | Select-String "DiscoveryService").ToString()
+    }
+}
+
+function Check-IME {
+    try {
+        $svc = Get-Service -Name IntuneManagementExtension -ErrorAction Stop
+        return "IME jelen van: $($svc.Status)"
+    } catch {
+        return "IME NINCS telepítve"
+    }
+}
+
+# === BUTTON ACTIONS ===
+
+# PRT + MDM URL ellenőrzés
+$btnCheckPRT.Add_Click({
+    $info = Get-PRTInfo
+    $ime = Check-IME
+
+    Log "`n=== PRT / MDM / IME állapot ==="
+    Log "PRT: $($info.PRT)"
+    Log "MDM URL: $($info.MDM)"
+    Log "Discovery URL: $($info.DISC)"
+    Log "IME: $ime"
+})
+
+# MFA indítása
+$btnMFA.Add_Click({
+    Log "`nMFA indítása..."
+    Start-Process "https://portal.azure.com"
+    Log "Authenticator MFA kell → sikeres hitelesítés után ellenőrizd újra a PRT-t."
+})
+
+# OMADM restart + sync
+$btnOMADM.Add_Click({
+    Log "`nOMADM transport újraindítása..."
+
+    $svc = Get-Service -Name dmwappushsvc -ErrorAction SilentlyContinue
+    if ($svc) {
+        if ($svc.Status -eq "Running") {
+            Stop-Service dmwappushsvc -Force -ErrorAction SilentlyContinue
+        }
+        Start-Service dmwappushsvc -ErrorAction SilentlyContinue
+        Log "dmwappushsvc újraindítva."
+    } else {
+        Log "dmwappushsvc nem érhető el (W11 24H2 minimális állapot)."
+    }
+
+    Log "OMADM Synchronize() hívása..."
+    $namespace = "root\cimv2\mdm\dmmap"
+    $class = "MDM_EnterpriseModernAppManagement_AppManagement01"
+
+    try {
+        $cim = Get-CimInstance -Namespace $namespace -ClassName $class -ErrorAction Stop
+        Invoke-CimMethod -InputObject $cim -MethodName "Synchronize" | Out-Null
+        Log "Synchronize lefutott."
+    }
+    catch {
+        Log "OMADM CIM objektum nem elérhető – lehet, hogy még nem enrolált a device."
+    }
+})
+
+# AUTOMATIKUS RETRY LOGIKA
+$btnRetry.Add_Click({
+    Log "`nAutomatikus Retry indítása… (30 másodpercenként)"
+
+    for ($i = 1; $i -le 20; $i++) {  # max 20 ciklus (~10 perc)
+        Log "`n=== Retry ciklus #$i ==="
+
+        $info = Get-PRTInfo
+        $ime = Check-IME
+
+        Log "PRT: $($info.PRT)"
+        Log "MDM URL: $($info.MDM)"
+        Log "Discovery URL: $($info.DISC)"
+        Log "IME: $ime"
+
+        # Ha már érvényes a PRT + MDM URL → leáll a retry, kész vagyunk
+        if ($info.PRT -match "YES" -and $info.MDM -match "http") {
+            Log "`nKÉSZ! A PRT jó, MDM URL jelen van. Leállítom a retry-t."
+            break
+        }
+
+        # OMADM sync minden körben
+        Log "OMADM Sync futtatása újra..."
+        try {
+            $cim = Get-CimInstance -Namespace "root\cimv2\mdm\dmmap" -ClassName "MDM_EnterpriseModernAppManagement_AppManagement01"
+            Invoke-CimMethod -InputObject $cim -MethodName "Synchronize" | Out-Null
+            Log "Synchronize lefutott ciklus közben."
+        }
+        catch {}
+
+        Start-Sleep -Seconds 30
+    }
+})
+
+$window.ShowDialog() | Out-Null Ellenőrizd a scriptet, és jelezd ha nem logol sehova
