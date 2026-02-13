@@ -1,0 +1,130 @@
+Write-Host "=== ÖSSZEVONT INTUNE / AAD / SCHANNEL / NGEN DIAGNOSZTIKA ===" -ForegroundColor Cyan
+
+# ---------------------------------------------------------
+# 1. Hybrid Join / AAD állapot
+# ---------------------------------------------------------
+Write-Host "`n[1/8] Azure AD / Hybrid Join állapot..." -ForegroundColor Yellow
+$ds = dsregcmd /status
+
+$prt = ($ds | Select-String "AzureAdPrt").ToString().Split(":")[1].Trim()
+$aj = ($ds | Select-String "AzureAdJoined").ToString().Split(":")[1].Trim()
+$cdj = ($ds | Select-String "DomainJoined").ToString().Split(":")[1].Trim()
+
+Write-Host " - AzureAdJoined: $aj"
+Write-Host " - DomainJoined: $cdj"
+Write-Host " - AzureAdPrt: $prt"
+
+# ---------------------------------------------------------
+# 2. Intune MDM Enrollment GUID-ek
+# ---------------------------------------------------------
+Write-Host "`n[2/8] MDM Enrollment GUID-ek vizsgálata..." -ForegroundColor Yellow
+
+$enrollRoot = "HKLM:\SOFTWARE\Microsoft\Enrollments"
+$active = @()
+
+if (Test-Path $enrollRoot) {
+    Get-ChildItem $enrollRoot | ForEach-Object {
+        $s = (Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue).EnrollmentState
+        $m = (Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue).MDMServerAddress
+        $u = (Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue).UPN
+
+        if ($s -eq 1 -and $m -and $u) {
+            Write-Host " -> AKTÍV GUID: $($_.PSChildName)" -ForegroundColor Green
+            Write-Host "    MDM URL: $m"
+            Write-Host "    UPN: $u"
+            $active += $_.PSChildName
+        }
+    }
+} else {
+    Write-Host "!!! Nincs Enrollments registry ág" -ForegroundColor Red
+}
+
+# ---------------------------------------------------------
+# 3. MDMEnrollment.log utolsó sorai
+# ---------------------------------------------------------
+Write-Host "`n[3/8] MDMEnrollment.log ellenőrzése..." -ForegroundColor Yellow
+$mdmLog = "$env:windir\Logs\MDM\MDMEnrollment.log"
+
+if (Test-Path $mdmLog) {
+    Get-Content $mdmLog | Select-Object -Last 20
+} else {
+    Write-Host "!!! Nincs MDMEnrollment.log – MDM enrollment még el sem indult" -ForegroundColor Red
+}
+
+# ---------------------------------------------------------
+# 4. OMA-DM provisioning állapot
+# ---------------------------------------------------------
+Write-Host "`n[4/8] OMADM provisioning állapot..." -ForegroundColor Yellow
+$omadm = "C:\Windows\System32\config\systemprofile\AppData\Local\Microsoft\MDM"
+
+if (Test-Path $omadm) {
+    Write-Host " -> OMADM provisioning könyvtár létezik – provisioning valószínű elindult." -ForegroundColor Green
+} else {
+    Write-Host "!!! Nincs OMADM provisioning könyvtár – MDM provisioning még nem futott." -ForegroundColor Red
+}
+
+# ---------------------------------------------------------
+# 5. SCHANNEL hibák
+# ---------------------------------------------------------
+Write-Host "`n[5/8] Schannel hibák vizsgálata (utolsó 30)..." -ForegroundColor Yellow
+Get-WinEvent -LogName System | Where-Object { $_.Id -in 36874,36888,36887,36871 } | 
+    Select-Object -First 30 -Property TimeCreated,Id,Message
+
+# ---------------------------------------------------------
+# 6. Kritikus TLS végpontok tesztje (AAD + Intune)
+# ---------------------------------------------------------
+Write-Host "`n[6/8] TLS teszt AAD/Intune végpontokra..." -ForegroundColor Yellow
+
+$urls = @(
+ "https://login.microsoftonline.com",
+ "https://enterpriseregistration.windows.net",
+ "https://device.login.microsoftonline.com",
+ "https://enrollment.manage.microsoft.com",
+ "https://deviceenrollment.microsoft.com"
+)
+
+foreach ($u in $urls) {
+    Write-Host "Teszt: $u" -ForegroundColor Cyan
+    try {
+        Invoke-WebRequest $u -UseBasicParsing -TimeoutSec 10 | Out-Null
+        Write-Host "  ✔ Sikeres TLS kapcsolat" -ForegroundColor Green
+    } catch {
+        Write-Host "  ✖ TLS/SCHANNEL HIBA: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# ---------------------------------------------------------
+# 7. NGEN Queue állapot
+# ---------------------------------------------------------
+Write-Host "`n[7/8] NGEN queue állapot..." -ForegroundColor Yellow
+
+$ngen64 = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\ngen.exe"
+$ngen32 = "C:\Windows\Microsoft.NET\Framework\v4.0.30319\ngen.exe"
+
+if (Test-Path $ngen64) {
+    Write-Host " -> 64-bit NGEN queue:" -ForegroundColor Cyan
+    & $ngen64 queue | Select-Object -First 20
+}
+
+if (Test-Path $ngen32) {
+    Write-Host " -> 32-bit NGEN queue:" -ForegroundColor Cyan
+    & $ngen32 queue | Select-Object -First 20
+}
+
+# ---------------------------------------------------------
+# 8. Összefoglalás
+# ---------------------------------------------------------
+Write-Host "`n[8/8] Összegzés:" -ForegroundColor Cyan
+
+if ($active.Count -eq 0) {
+    Write-Host "❗ NINCS aktív MDM Enrollment GUID – enrollment NEM sikerült." -ForegroundColor Red
+} else {
+    Write-Host "✔ MDM Enrollment GUID OK." -ForegroundColor Green
+}
+
+if ($prt -ne "YES") {
+    Write-Host "❗ PRT NINCS – Hybrid Join részben vagy teljesen hibás." -ForegroundColor Red
+}
+
+Write-Host "`nHa piros jelzés látod: Schannel, NGEN, TLS vagy HybridJoin hiba blokkolja az Intune enrollmentet." -ForegroundColor Yellow
+Write-Host "=== DIAG KÉSZ ===" -ForegroundColor Cyan
