@@ -1,0 +1,194 @@
+Write-Host "=== FULL Intune MDM + Hybrid Join Reset Script v2.0 (2026 Safe for SCCM Co-Management) ===" -ForegroundColor Cyan
+
+# -------------------------------------------------------
+# 0. NGEN + Fusion Cache törlése (Win11/Win12 kritikus!)
+# -------------------------------------------------------
+Write-Host "[0/12] NGEN + Fusion Cache törlése..." -ForegroundColor Yellow
+$ngenPaths = @(
+    "$env:windir\Microsoft.NET\Framework64\v4.0.30319",
+    "$env:windir\Microsoft.NET\Framework\v4.0.30319"
+)
+foreach ($path in $ngenPaths) {
+    if (Test-Path "$path\ngen.exe") {
+        & "$path\ngen.exe" executeQueuedItems 2>$null
+    }
+}
+ie4uinit.exe -show 2>$null
+Start-Sleep -Seconds 3
+
+# -------------------------------------------------------
+# 1. Helyi Hybrid Join / AAD állapot teljes törlése
+# -------------------------------------------------------
+Write-Host "[1/12] Azure AD / Hybrid Join állapot törlése..." -ForegroundColor Yellow
+dsregcmd /leave | Out-Null
+Start-Sleep -Seconds 2
+klist purge | Out-Null
+
+# -------------------------------------------------------
+# 2. Régi MDM Enrollment GUID-ek törlése
+# -------------------------------------------------------
+Write-Host "[2/12] Régi MDM Enrollment GUID-ek törlése..." -ForegroundColor Yellow
+$enrollRoot = "HKLM:\SOFTWARE\Microsoft\Enrollments"
+$enrollStatus = "HKLM:\SOFTWARE\Microsoft\Enrollments\Status"
+if (Test-Path $enrollRoot) {
+    Get-ChildItem $enrollRoot | ForEach-Object {
+        $guid = $_.PSChildName
+        Write-Host " - Törlés: Enrollment GUID $guid" -ForegroundColor Red
+        Remove-Item -Path "$enrollRoot\$guid" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "$enrollStatus\$guid" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# -------------------------------------------------------
+# 2.5 WinHTTP Proxy + Certificate Cache (Modern Standby)
+# -------------------------------------------------------
+Write-Host "[2.5/12] WinHTTP + Certificate cache törlése..." -ForegroundColor Yellow
+netsh winhttp reset proxy | Out-Null
+certutil -urlcache * delete | Out-Null
+certutil -setreg chain\EnableWeakSignatureFlags 8 | Out-Null
+
+# -------------------------------------------------------
+# 3. OMADM provisioning cache törlése
+# -------------------------------------------------------
+Write-Host "[3/12] OMADM provisioning cache törlése..." -ForegroundColor Yellow
+$mdmPaths = @(
+    "C:\Windows\System32\config\systemprofile\AppData\Local\mdm",
+    "C:\Windows\System32\config\systemprofile\AppData\Local\Microsoft\MDM",
+    "C:\Windows\System32\config\systemprofile\AppData\Local\Microsoft\DeviceEnroller"
+)
+foreach ($path in $mdmPaths) {
+    if (Test-Path $path) {
+        Write-Host " - Törlés: $path" -ForegroundColor Red
+        Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# -------------------------------------------------------
+# 4. Policy CSP cache törlése
+# -------------------------------------------------------
+Write-Host "[4/12] Policy CSP maradványok törlése..." -ForegroundColor Yellow
+$policyPaths = @(
+    "HKLM:\SOFTWARE\Microsoft\PolicyManager\AdmxInstalled",
+    "HKLM:\SOFTWARE\Microsoft\PolicyManager\Current",
+    "HKLM:\SOFTWARE\Microsoft\PolicyManager\Providers"
+)
+foreach ($path in $policyPaths) {
+    if (Test-Path $path) {
+        Write-Host " - Policy CSP törlése: $path" -ForegroundColor Red
+        Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# -------------------------------------------------------
+# 5. IdentityCache törlése
+# -------------------------------------------------------
+Write-Host "[5/12] IdentityCache törlése..." -ForegroundColor Yellow
+$idCache = "C:\ProgramData\Microsoft\IdentityCache"
+if (Test-Path $idCache) {
+    Remove-Item $idCache -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host " - IdentityCache törölve." -ForegroundColor Red
+}
+
+# -------------------------------------------------------
+# 6. Régi EnterpriseMgmt GUID-ek törlése (Scheduled Tasks)
+# -------------------------------------------------------
+Write-Host "[6/12] EnterpriseMgmt Task mappák tisztítása..." -ForegroundColor Yellow
+$taskRoot = "C:\Windows\System32\Tasks\Microsoft\Windows\EnterpriseMgmt"
+if (Test-Path $taskRoot) {
+    Get-ChildItem $taskRoot | ForEach-Object {
+        $guid = $_.Name
+        Write-Host " - Törlés: EnterpriseMgmt task $guid" -ForegroundColor Red
+        Remove-Item -Path "$taskRoot\$guid" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# -------------------------------------------------------
+# 7. Régi AAD/Workplace Join regisztrációk törlése
+# -------------------------------------------------------
+Write-Host "[7/12] Régi Workplace Join / AAD regisztrációk törlése..." -ForegroundColor Yellow
+$aadPaths = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AAD",
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CDJ"
+)
+foreach ($path in $aadPaths) {
+    if (Test-Path $path) {
+        Write-Host " - Törlés: $path" -ForegroundColor Red
+        Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# -------------------------------------------------------
+# 8. Tiszta MDM Auto-Enrollment registry létrehozása (2026)
+# -------------------------------------------------------
+Write-Host "[8/12] MDM Auto-Enrollment registry újraírása (2026 compliant)..." -ForegroundColor Yellow
+$mdmPolicy = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\MDM"
+New-Item -Path $mdmPolicy -Force | Out-Null
+Set-ItemProperty -Path $mdmPolicy -Name "AutoEnrollMDM" -Value 1 -Type DWord
+Set-ItemProperty -Path $mdmPolicy -Name "UseAADCredentialType" -Value 1 -Type DWord
+Set-ItemProperty -Path $mdmPolicy -Name "Scope" -Value 1 -Type DWord
+# 2026 újdonság: Disable MAM enrollment blokkolás
+Set-ItemProperty -Path $mdmPolicy -Name "DisableMAMEnrollment" -Value 0 -Type DWord
+
+Write-Host " - Auto-Enrollment policy beállítva (Scope=1, User Credential, MAM OK)." -ForegroundColor Green
+
+# -------------------------------------------------------
+# 8.5 DeviceEnroller EventLog reset
+# -------------------------------------------------------
+Write-Host "[8.5/12] DeviceEnroller EventLog reset..." -ForegroundColor Yellow
+wevtutil.exe cl Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin 2>$null
+wevtutil.exe cl MDM/Operational 2>$null
+
+# -------------------------------------------------------
+# 9. GPUpdate + MDM Enrollment indítása
+# -------------------------------------------------------
+Write-Host "[9/12] GPO frissítés és MDM beiratkozás indítása..." -ForegroundColor Yellow
+gpupdate /force | Out-Null
+Start-Sleep -Seconds 3
+Write-Host " - MDM Enrollment indítása..." -ForegroundColor Yellow
+rundll32.exe deviceenroller.dll,DeviceEnrollmentExecute | Out-Null
+
+# -------------------------------------------------------
+# 10. Átmeneti állapot ellenőrzése
+# -------------------------------------------------------
+Write-Host "[10/12] Átmeneti állapot ellenőrzése..." -ForegroundColor Yellow
+Start-Sleep -Seconds 5
+$dsreg = dsregcmd /status 2>$null
+if ($dsreg -match "AzureAdJoined : YES") {
+    Write-Host " ✓ Azure AD Join: OK" -ForegroundColor Green
+} else {
+    Write-Host " ⚠️  Azure AD Join: Várakozás..." -ForegroundColor Yellow
+}
+
+# -------------------------------------------------------
+# 11. TPM + BitLocker állapot ellenőrzése
+# -------------------------------------------------------
+Write-Host "[11/12] TPM/BitLocker állapot ellenőrzése..." -ForegroundColor Yellow
+try {
+    $tpm = Get-Tpm
+    if ($tpm.TpmPresent -and $tpm.TpmReady) {
+        Write-Host " ✓ TPM OK (Owned: $($tpm.TpmOwnershipStatus))" -ForegroundColor Green
+    } else {
+        Write-Host " ⚠️  TPM probléma detektálva!" -ForegroundColor Red
+    }
+    
+    $bitlocker = Get-BitLockerVolume -MountPoint C: -ErrorAction SilentlyContinue
+    if ($bitlocker) {
+        Write-Host " ✓ BitLocker: $($bitlocker.VolumeStatus)" -ForegroundColor Green
+    }
+} catch {
+    Write-Host " ⚠️  TPM/BitLocker ellenőrzés sikertelen" -ForegroundColor Yellow
+}
+
+# -------------------------------------------------------
+# 12. Összefoglaló + Log információ
+# -------------------------------------------------------
+Write-Host "`n[12/12] === SCRIPT KÉSZ! ===" -ForegroundColor Cyan
+Write-Host "MDMEnrollment.log helye:" -ForegroundColor Cyan
+Write-Host "$env:windir\Logs\MDM\MDMEnrollment.log" -ForegroundColor Green
+Write-Host "Event Viewer: Applications and Services Logs > Microsoft > Windows > MDM" -ForegroundColor Green
+Write-Host "`nKövetkező lépések:" -ForegroundColor Cyan
+Write-Host "- Várj 5-15 percet" -ForegroundColor White
+Write-Host "- Futtasd: dsregcmd /status" -ForegroundColor White
+Write-Host "- Ellenőrizd: Beállítások > Fiókok > Munkahelyi hozzáférés" -ForegroundColor White
+Write-Host "`nA SCCM Co-Management érintetlen marad!" -ForegroundColor Green
+Write-Host "=== v2.0 (2026) - Modern Standby + Win12 kompatibilis ===" -ForegroundColor Cyan
