@@ -1,0 +1,179 @@
+Javítás sorrend (AAD join → teljes működés)
+text
+1. ADFS: Enable-AdfsDeviceRegistration
+2. DC: AllowNetrPRNameToPrt=1 registry  
+3. Eszköz: dsregcmd /leave + restart
+4. Automatic-Device-Join task → DRS teljes reg
+5. EnterpriseEnrollment mappa létrejön
+6. Intune: hostname + primary user megjelenik
+TL;DR: AAD join sikerül ADFS DRS nélkül is (AzureAdJoined: YES), de nincs Transport Key regisztráció → MSIS9682 + pending Intune. ADFS Device Registration kötelező a teljes enterprise funkcionalitáshoz (Intune, workload shift). Ellenőrizd: Get-AdfsDeviceRegistration ADFS szerveren!
+
+Miért pont a user stae-nél kerül elő az msis hiba?
+A user state-nél (felhasználói kontextusban) kerül elő az MSIS9682 hiba, mert ott történik meg először a teljes PRT-alapú OAuth JWT token generálás és validáció a Transport Key-vel, ami a DRS regisztráció hiánya miatt bukik el.
+
+Miért pont user login-kor (nem system context-ben)?
+System context (bootkor, Automatic-Device-Join)
+text
+SYSTEM account → LDAP SCP → Device Key + Transport Key generálás
+↓
+DRS regisztráció KÍSÉRELTES (nincs user token) → részben sikerül
+↓
+AzureAdJoined: YES (device objektum létrejön)
+EnterpriseEnrollment mappa részben létrejön
+User state (első domain login)
+text
+User Kerberos TGT → NgcSvc → PRT request
+↓
+Transport Key aláírja JWT Bearer tokent
+↓
+OAuth flow: POST /enrollmentserver/device/<DeviceId>/register
+↓
+Azure AD: "Transport Key NEM regisztrált!" → MSIS9682
+↓
+CoManagementHandler MSI enrollment → TIMEOUT
+Pontos időzítés a hibára
+text
+1. Boot: Automatic-Device-Join → SCP OK → AzureAdJoined: YES
+2. User login (0 perc): Kerberos → PRT extension attempt
+3. NgcCbs.log (1-2 mp): "JWT signing with Transport Key"
+4. DRS call (5 mp): MSIS9682 "invalid oauth JWT Bearer"
+5. CoManagementHandler.log (10 mp): MSI error 9682
+Miért user state-ig eljut (system OK, user FAIL)
+text
+dsregcmd /status SYSTEM-ként:
+AzureAdJoined: YES  ✓ (device reg részben OK)
+DeviceId: van       ✓
+
+dsregcmd /status USER-ként:  
+AzureAdPrt: YES     ✓ (user SSO)
+EnterprisePrt: NO   ✗ (DRS Transport Key hiányzik)
+SSO State: Filtered ✗ (JWT validation failed)
+Kritikus különbség: JWT Bearer token
+System context: Csak device metadata sync (nincs JWT)
+User context: Teljes OAuth flow Transport Key JWT aláírással
+
+text
+User loginkor:
+NgCKeyProv.dll → TransportKey.sign(JWT) → DRS OAuth
+                           ↓
+                   "Certificate not from registered device" ← MSIS9682
+Javítás sorrend (user state előtt)
+text
+1. ADFS: Enable-AdfsDeviceRegistration (DeviceToken endpoint)
+2. DC: AllowNetrPRNameToPrt=1 (Enterprise PRT)
+3. Eszköz SYSTEM: dsregcmd /leave + teljes cleanup
+4. Restart → Automatic-Device-Join → DRS teljes reg
+5. User login → PRT + JWT SUCCESS → NEM MSIS9682
+Logok sorrendje (user state hiba)
+text
+C:\Windows\CCM\CoManagementHandler.log:  "MSI error 9682"
+Event Viewer → NgcCbs:                   "PRT acquisition failed"
+dsregcmd /status:                       "SSO State: Filtered"
+C:\Windows\CCM\Logs\CMGService.log:     "JWT Bearer invalid"
+TL;DR: User state = PRT + OAuth JWT generálás Transport Key-vel. System context csak device regisztráció (nincs JWT). MSIS9682 csak user login-kor bukik, mert akkor kell először a DRS-ben regisztrált Transport Key a teljes enrollmenthez.
+
+Utánkövetések
+
+Hogyan javítsuk ki az msis9682 hibát AD FS-ben
+
+Mi a PRT szerepe a hibrid join user state-ben
+
+AzureADPRT=YES ellenőrzése dsregcmd-vel
+
+Hogyan szinkronizáljuk a device objectet Azure AD Connecttel
+
+Relying party trust konfiguráció Azure AD-hez AD FS-ben
+Hogyan javítsuk ki az msis9682 hibát AD FS-ben
+Az MSIS9682 hiba javítása AD FS-ben hibrid join kontextusban 3 lépcsős folyamat: ADFS Device Registration engedélyezése → endpoint ellenőrzés → kliens újracsatlakoztatás.
+
+1. ADFS Device Registration engedélyezése (kritikus)
+ADFS szerveren PowerShell-ként (Domain Admin jogosultság)
+powershell
+# Ellenőrzés
+Get-AdfsDeviceRegistration
+
+# Engedélyezés (ha Disabled)
+Enable-AdfsDeviceRegistration
+Set-AdfsDeviceRegistration -EnableDeviceRegistration $true
+
+# Claims Provider Trust konfiguráció DeviceReg-hez
+Set-AdfsClaimsProviderTrust -AnchorPartnerIdentifier "DeviceReg"
+Elvárt eredmény:
+
+text
+Enabled : True
+Url     : https://adfs.contoso.com/adfs/ls/DeviceTokenRequest
+2. DeviceToken endpoint ellenőrzése
+Hozzáférhetőség teszt (ADFS szerverről)
+powershell
+# Port 443 elérhetőség
+Test-NetConnection adfs.contoso.com -Port 443
+
+# Endpoint válasz
+Invoke-WebRequest "https://adfs.contoso.com/adfs/ls/DeviceTokenRequest" -UseBasicParsing
+IIS binding ellenőrzés (AD FS Management)
+text
+AD FS Management → Service → Endpoints
+├─ /adfs/ls/DeviceTokenRequest → Enabled ✓
+└─ /adfs/ls/DeviceToken → Enabled ✓
+3. Tűzfal/SSL ellenőrzés
+text
+ADFS farm minden node-ján:
+├─ Port 443 → device.registration.windows.net
+├─ Port 443 → enterpriseregistration.windows.net  
+└─ ADFS SSL cert: Érvényes dátum + wildcard/domain name egyezés
+4. Kliens oldali teljes javítás
+SYSTEM context-ben (PsExec -s cmd)
+text
+REM 1. Teljes cleanup
+dsregcmd /leave
+schtasks /delete /tn "\Microsoft\Windows\Workplace Join\Automatic-Device-Join" /f
+
+REM 2. Regisztrációk törlése
+reg delete "HKLM\SOFTWARE\Microsoft\Enrollments" /f
+
+REM 3. Restart + új join
+shutdown /r /t 0
+Restart után 5 percen belül:
+
+text
+Automatic-Device-Join task fut → ADFS DeviceTokenRequest → DRS regisztráció
+dsregcmd /status → TransportKeyType: Asymmetric + DeviceKeyState: 1
+5. DC oldali kiegészítés (Enterprise PRT-hez)
+powershell
+# Minden DC-n
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CDJ\AAD" /v AllowNetrPRNameToPrt /t REG_DWORD /d 1 /f
+gpupdate /force
+Restart-Service kdc
+Ellenőrzési sorrend (siker kritériumok)
+text
+1. ADFS: Get-AdfsDeviceRegistration → Enabled: True ✓
+2. Eszköz: dir C:\Windows\ServiceProfiles\LocalService\AppData\Local\EnterpriseEnrollment → LÉTEZIK ✓
+3. dsregcmd /status:
+   - AzureAdJoined: YES
+   - DeviceKeyState: 1  
+   - TransportKeyType: Asymmetric ✓
+4. Intune: Device hostname + Primary User megjelenik (nem pending)
+5. SCCM: CoManagementHandler.log → NEM MSIS9682 ✓
+Gyors script (ADFS szerverre)
+powershell
+# Futtasd ADFS Primary node-on
+$adfsName = "adfs.contoso.com"
+Enable-AdfsDeviceRegistration
+Set-AdfsClaimsProviderTrust -AnchorPartnerIdentifier "DeviceReg" -ErrorAction SilentlyContinue
+
+Write-Host "ADFS Device Registration: $(Get-AdfsDeviceRegistration | select -ExpandProperty Enabled)"
+Write-Host "DeviceToken endpoint: https://$adfsName/adfs/ls/DeviceTokenRequest" -Foreground Green
+TL;DR: ADFS farm minden node-ján: Enable-AdfsDeviceRegistration + /DeviceTokenRequest endpoint ellenőrzés + kliens dsregcmd /leave + restart. 15 perc alatt kész, MSIS9682 eltűnik, Intune enrollment működik.
+
+Utánkövetések
+
+Mi a teljes jelentése az msis9682 hibának hibrid joinnál
+
+Hogyan állítsuk be a claims mappinget AD FS-ben Intune-hoz
+
+PowerShell parancsok AD FS claims ellenőrzésére
+
+AD FS diagnosztikai szkript letöltése és futtatása
+
+Tűzfal konfiguráció WAP és AD FS szervereken
