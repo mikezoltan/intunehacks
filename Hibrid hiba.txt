@@ -1,0 +1,404 @@
+
+
+Szia! Mi a legbiztosabb módszer entrában és intuneban a hibás intune enrollmentek nyomainak a kitakarítására, ha a gép emlékszik a régebbi enrollmentekre, és amiatt dől be folyamatosan az intune enrollment?
+3 lépés teljesítve
+Szia! A legbiztosabb módszer a hibás Intune enrollment nyomok eltávolítására Windows gépen az, ha először ellenőrzöd a jelenlegi állapotot (pl. dsregcmd /status), majd törlöd a helyi enrollment artifacteket, végül törlöd a régi device rekordot az Entra ID/Intune portálon, és újraindítod az enrollmentt.
+
+Állapot ellenőrzése
+Futtasd adminisztrátorként a következő parancsot a gépén, hogy lásd az Entra Join és MDM enrollment állapotát:
+
+text
+dsregcmd /status
+Keress "AzureAdJoined: YES", "DomainJoined: NO", MDM URL-t és hibákat.
+
+Ha részben enrolled, nézd meg az Event Viewert: Applications and Services Logs > Microsoft > Windows > DeviceManagement-Enterprise-Diagnostics-Provider > Admin.
+
+Helyi traces kitakarítása (gépen)
+Ez távolítja el a régi enrollment nyomelemeket, ami miatt a gép "emlékszik":
+
+Accounts törlése: Beállítások > Fiókok > Munka vagy iskola hozzáférés > Kapcsolatok leválasztása (Disconnect).
+
+Certifikátumok törlése:
+
+Futtasd: mmc > File > Add/Remove Snap-ins > Certificates (Computer account, Local Computer) > Personal > Certificates.
+
+Töröld a "Sc_Online_Issuing" által kiállított Intune certet.
+
+Registry kulcsok törlése (előtte backup! Regedit adminisztrátorként):
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments alatti GUID mappák (ne töröld a Context, Status stb. alkulcsokat).
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\OnlineManagement és alkulcsai.
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\EnterpriseDesktopAppManagement (ha van).
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\CloudDomainJoin (ha van).
+
+Opcionális: HKEY_CLASSES_ROOT\Installer\Products\6985F0077D3EEB44AB6849B5D7913E95.
+
+Feladatok törlése:
+
+text
+schtasks /delete /tn "\Microsoft\Windows\EnterpriseMgmt\*" /f
+Újraindítás.
+
+PowerShell szkript példa a gyors törléshez (adminisztrátorként):
+
+text
+Get-WmiObject -Namespace "root\cimv2\mdm" -Class MDM_Enrollment | Remove-WmiObject
+Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Enrollments" -Recurse -Force
+Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\EnterpriseDesktopAppManagement" -Recurse -Force
+schtasks /delete /tn "PushLaunch" /f
+Entra ID / Intune oldali tisztítás
+Entra ID portál (entra.microsoft.com) > Devices > keresd a device nevét vagy ID-jét (dsregcmd-ből) > Delete.
+
+Intune admin center (endpoint.microsoft.com) > Devices > Windows > keresd a hibás device-t > Delete (ha compliant vagy részben enrolled).
+
+Ha hybrid join, először on-prem AD-ből disable/delete, várj sync-re.
+
+Új enrollment indítása
+dsregcmd /join vagy dsregcmd /forcerecovery (Entra joined esetén).
+
+Vagy: Settings > Accounts > Access work or school > Connect > munkajelszóval.
+
+Automatikus: Start-Process "C:\Windows\System32\DeviceEnroller.exe" -ArgumentList "/c /AutoEnrollMDM".
+
+Összefoglaló
+Ez a teljes cleanup (lokális + felhő) a legbiztosabb, mert eltávolítja az összes régi certet, registry-t és device rekordot, így a folyamatos bukás megszűnik – teszteld kisgépen előbb, backupelj registry-t! Ha továbbra sem megy, generálj MDM Diagnostics Tool-t (mdmdiagnosticstool.exe) és nézd a logokat.
+
+SCCM comanagement esetén gondolom, hogy vegyem ki a gépet a pilot collectionből.
+2 lépés teljesítve
+Igen, SCCM co-management esetén a pilot collectionből való kivétel a helyes első lépés, mert ez állítja le a pilot workloads alkalmazását a gépen, így visszatér az alap co-management állapothoz (pl. minden workload SCCM-en marad).
+
+Mi történik a pilot collection kivétellel?
+A pilot collectionre deployolt co-management policy-k (workloads mint Compliance, Device Config, Windows Update stb.) csak arra a collectionre érvényesek.
+
+Ha kiveszed a gépet, a policy visszavonódik (client policy refresh után, kb. 1 óra), és a workloadok visszacsúsznak SCCM-re, ha nem production módban vannak.
+
+A co-management enrollment NEM szűnik meg – a gép marad Entra joined/MDM enrolled, csak a pilot-specifikus beállítások tűnnek el.
+
+Hogyan vedd ki a gépet?
+SCCM konzol > Assets and Compliance > Device Collections > jobb klikk a pilot collectionre > Properties > Membership Rules.
+
+Ha direct membership: kiemel > Remove/Delete.
+
+Ha query-based: hozz létre exclude collection-t (csak a problémás géppel), majd a fő collection Properties > Collections tab > Exclude > válaszd az exclude-ot.
+
+PowerShell-lel (SCCM konzolon belül, Connect via Windows PowerShell):
+
+text
+Remove-CMDeviceCollectionDirectMembershipRule -CollectionName "Pilot Collection Name" -ResourceName "GEPNEV" -Force
+Vagy wildcarddel: -ResourceName "GEP*" többhöz.
+
+Client oldalon: Machine Policy Retrieval & Evaluation Cycle triggereld (Configuration Manager applet > Actions tab).
+
+Ha teljes unenroll kell (co-management leállítás)
+Ha vissza akarod vonni az egészet:
+
+SCCM konzol > Administration > Cloud Services > Co-management > Properties > Enablement > All Systems collectionből is távolítsd (ha ott van).
+
+Gépen: dsregcmd /leave (elevated CMD).
+
+Entra/Intune: töröld a device rekordot.
+
+Összefoglaló
+Pilot collection kivételével megoldod a probléma nagy részét anélkül, hogy unenrollolnál – várd meg a policy refresh-t, ellenőrizd dsregcmd /status-szal és SCCM logokkal (CoManagementHandler.log). Ha nem frissül, force client actions vagy teljes cleanup a korábbi válasz alapján.
+
+ADFS-ben van teendőm, ha nincs device writeback?
+2 lépés teljesítve
+Nem, ha nincs bekapcsolva a device writeback (Azure AD Connect-ben), akkor nincs külön teendőd az ADFS-ben a hibás enrollment kitakarításához vagy a co-management kezeléséhez – az ADFS önmagában nem tárol device objektumokat on-prem AD-ben.
+
+Mi a device writeback szerepe ADFS-sel?
+Nem szükséges alap enrollmenthez: Pure cloud Entra join/Intune enrollment esetén (mint a te eseted) a device-ok csak felhőben léteznek, nincs on-prem writeback igény.
+
+Csak speciális esetekben kell:
+
+Hybrid Azure AD join (HAADJ) esetén, ha Conditional Access-t akarsz ADFS protected appokra (Relying Party Trusts), pl. device compliance check.
+
+Windows Hello for Business hybrid cert trust deployment.
+
+Ha nincs writeback, ADFS-ben NEM működik a device-based CA on-prem appokra – fallback MFA-ra vagy block-ra.
+
+ADFS ellenőrzés enrollment kontextusban
+Ellenőrizd, van-e Device Registration Service (DRS) engedélyezve (2012R2+ ADFS):
+
+text
+Get-AdfsProperties | fl *device*
+Ha DeviceRegistrationEnabled: True, akkor DRS aktív (de writeback nélkül csak részleges).
+
+Ha DRS on, de nincs writeback: Lehet hibás device regisztráció – tiltsd le: Disable-AdfsDeviceRegistration (ha nem kell).
+
+Nincs hatása a te problémádra (cloud enrollment traces), mert DRS elsősorban seamless SSO/CA-hoz kell, nem enrollment cleanuphoz.
+
+Összefoglaló
+Device writeback nélkül ADFS-ben nincs teendőd – folytasd a korábbi lépésekkel (registry cleanup, Entra delete, pilot collection remove). Ha hybrid CA-t használsz, fontold meg a writeback bekapcsolását Azure AD Connect-ben (AAD P1 kell). Ellenőrizd AAD Connect configot: wizard > Customize > Device options.
+
+Turn on SSO to on-premises resources with Microsoft Entra ID
+State: Enabled + Required Ezt hol?
+Pontosan itt kell beállítanod:
+
+text
+Group Policy Management Console (gpmc.msc)
+→ Új GPO vagy meglévő szerkesztése
+→ Computer Configuration → Policies → Administrative Templates 
+→ System → Entra ID (vagy "Logon" mappában Windows 11/2022)
+→ "Turn on SSO to on-premises resources with Microsoft Entra ID"
+→ **Required** + **Enabled**
+Lépésről lépésre:
+1. GPO létrehozása
+text
+Win + R → gpmc.msc
+→ Group Policy Objects → Jobb klikk → New → "Entra SSO GPO"
+2. Policy szerkesztése
+text
+Jobb klikk "Entra SSO GPO" → Edit
+Computer Configuration → Policies → Administrative Templates 
+→ System → Entra ID → "Turn on SSO to on-premises resources..."
+3. Beállítás
+text
+Status: **Enabled**
+Options: **Required**
+→ OK → Apply
+4. OU-hoz linkelés
+text
+GPO → Link an Existing GPO → "Entra SSO GPO" 
+→ Válaszd a gépek OU-ját (pl. "Workstations")
+5. Force alkalmazás
+Minden érintett gépen:
+
+text
+gpupdate /force
+Windows verzió szerint helye:
+text
+Windows 10 21H2+: System → Entra ID
+Windows 11/Server 2022: System → Entra ID  
+Windows Server 2019: Logon → "SSO to on-premises..."
+Ellenőrzés:
+text
+gpresult /r /scope:computer | findstr "Entra"
+text
+Kell látszani:
+"Turn on SSO to on-premises resources... Enabled (Required)"
+Eredmény 5 perc múlva:
+text
+dsregcmd /status | findstr OnPremTgt
+# OnPremTgt: YES ✅
+
+klist tgt
+# asktgt@CORP.DOMAIN.COM ✅
+Ha NEM találod a beállítást:
+Administrative Templates frissítése kell:
+
+text
+LGPO.exe letöltés Microsoft-tól → Import → friss ADMX
+Vagy: Windows Server 2022 RSAT → Administrative Templates
+Összefoglalva: GPO → Computer Config → Administrative Templates → System → Entra ID → "Turn on SSO..." → Required + Enabled → Link OU → gpupdate /force = OnPremTGT YES!
+
+Ez a leggyakoribb okja az OnPremTGT=NO hibának!
+
+Utánkövetések
+
+Mi a teendő ha multiple forestben kell engedélyezni Seamless SSO
+
+Hogyan történik az AZUREADSSOACC fiók létrehozása manuálisan
+
+Milyen hibák léphetnek fel Seamless SSO engedélyezésekor
+
+Hogyan tesztelhető a Seamless SSO on-premises appokon
+
+Mi a különbség Seamless SSO és Passwordless között Entra join gépeken
+Mi a teendő ha multiple forestben kell engedélyezni Seamless SSO
+Multiple forest-ben a Seamless SSO FORESTENKÉNT külön kell engedélyezni!** Minden forest-nek saját AZUREADSSOACC computer account-ja kell.
+
+Multiple Forest Seamless SSO lépések
+1. MINDEN FORESTBEN külön-külön:
+Forest1 (pl. Primary Forest):
+
+powershell
+# Forest1 Azure AD Connect szerverén
+cd "C:\Program Files\Microsoft Azure Active Directory Connect\"
+Import-Module .\AzureADSSO.psd1
+New-AzureADSSOAuthenticationContext -Tenant "tenant1.onmicrosoft.com"
+Update-AzureADSSOForest
+Forest2 (pl. Misk Forest):
+
+powershell
+# Forest2 Azure AD Connect szerverén (HA VAN) VAGY RSAT gépen
+Import-Module .\AzureADSSO.psd1  
+New-AzureADSSOAuthenticationContext -Tenant "tenant1.onmicrosoft.com"  # UGYANAZ a tenant!
+Update-AzureADSSOForestAuto  # Forest-specifikus
+2. GPO MINDEN FORESTBEN külön
+Forest1 GPO:
+
+text
+Domain Controllers OU → "Seamless SSO Forest1"
+Computer Config → Admin Templates → System → Logon
+"Microsoft Entra ID Seamless SSO" → Enabled
+IntraForestRoamingEnabled: true  # Forest↔forest trust
+Forest2 GPO:
+
+text
+Forest2 gépek OU-ja → "Seamless SSO Forest2"
+Ugyanazok a beállítások!
+3. AZUREADSSOACC ellenőrzés
+powershell
+# MINDEN forest root-ban:
+Get-ADComputer -Identity "AZUREADSSOACC" -Server "forest1.dc"
+Get-ADComputer -Identity "AZUREADSSOACC" -Server "forest2.dc"
+Multiple Forest korlátok
+text
+✅ Forest1 + Forest2 user-ek → Seamless SSO OK (forest trust kell)
+✅ Forest1 gépek → Forest1/2 resources
+✅ Forest2 gépek → Forest1/2 resources  
+❌ Különböző tenant-ek → NEM támogatott
+A TE OnPremTGT=NO problémádra
+Multiple forest-ben MINDEN forest-ben kell:
+
+text
+1. AZUREADSSOACC computer account
+2. Seamless SSO GPO (Required + Enabled)  
+3. Forest trust (ha cross-forest access kell)
+Gyors checklist multiple forest-hez
+powershell
+# Forest1 DC-n:
+Get-ADComputer AZUREADSSOACC; gpresult /r | findstr Seamless
+
+# Forest2 DC-n:
+Get-ADComputer AZUREADSSOACC; gpresult /r | findstr Seamless
+Összefoglaló
+text
+MINDEN FOREST = KÜLÖN:
+✅ AZUREADSSOACC létrehozás
+✅ Seamless SSO GPO linkelés  
+✅ Update-AzureADSSOForest
+
+Forest trust OK → Cross-forest SSO működik!
+Ellenőrizd MINDKÉT forest-ben az AZUREADSSOACC account + GPO-t! Ez okozza az OnPremTGT=NO-t minden gépen!
+
+Utánkövetések
+
+Hogyan rotáljuk a Kerberos kulcsot több forestben
+
+Mi történik ha több tenant van egy forestben Seamless SSO-val
+
+Szükséges-e minden erdőben Update-AzureADSSOForest futtatása
+
+Hogyan teszteljük Seamless SSO-t több domain között
+
+Milyen GPO-k kellenek Seamless SSO multi-forest setuphoz
+Milyen GPO-k kellenek Seamless SSO multi-forest setuphoz
+Multiple forest Seamless SSO-hoz MINDEN FORESTBEN külön GPO kell!****
+
+Kötelező GPO-k forest-enként
+1. MINDEN FORESTBEN: "Microsoft Entra Seamless SSO" GPO
+text
+gpmc.msc → Group Policy Objects → New → "Entra Seamless SSO - FORESTNEV"
+
+**Location:** Computer Configuration → Policies → Administrative Templates → System → Entra ID (vagy Logon)
+
+**Beállítások:**
+"Enable Seamless Single Sign-On" → Enabled
+
+"IntraForestRoamingEnabled" → Enabled (cross-forest trust-hoz)
+
+"AlternateLoginIdEnabled" → Disabled (ha UPN=UPN)
+
+text
+
+### **2. OU linkelés FORESTENKÉNT**
+Forest1: Domain Controllers OU + Workstations OU → Link "Entra Seamless SSO - Forest1"
+Forest2: Domain Controllers OU + Workstations OU → Link "Entra Seamless SSO - Forest2"
+
+text
+
+## **Pontos GPO path-ok Windows szerint:**
+Windows 10 21H2+ / Windows 11 / Server 2022:
+Computer Config → Administrative Templates → System → Entra ID
+└── "Enable Seamless Single Sign-On" → Enabled
+
+Windows Server 2019 / régebbi:
+Computer Config → Administrative Templates → System → Logon
+└── "Microsoft Entra ID Seamless SSO" → Enabled
+
+text
+
+## **3. AZUREADSSOACC GPO jogosultságok**
+
+**Minden forest-ben:**
+AZUREADSSOACC computer account → Read + Apply Group Policy jogosultság
+Minden gépek OU-ján
+
+text
+
+## **4. Complete GPO sablon script**
+
+```powershell
+# Forest1 GPO létrehozás
+New-GPO -Name "Entra Seamless SSO - Forest1" -Comment "Seamless SSO Forest1"
+Set-GPRegistryValue -Name "Entra Seamless SSO - Forest1" -Key "HKLM\SOFTWARE\Microsoft\Azure AD Connect\Seamless SSO" -ValueName "Enabled" -Type DWord -Value 1
+New-GPLink -Name "Entra Seamless SSO - Forest1" -Target "OU=Workstations,DC=forest1,DC=com"
+
+# Forest2 ugyanígy...
+```
+
+## **5. Ellenőrzés forest-enként**
+
+```cmd
+# Forest1 gépen:
+gpresult /r | findstr "Seamless"
+dsregcmd /status | findstr "AzureAdPrt|OnPremTgt"
+
+# Forest2 gépen: Ugyanaz
+```
+
+## **Cross-forest speciális beállítások**
+HA forest trust van:
+IntraForestRoamingEnabled: Enabled
+IncludeForestFqdnList: "forest1.com,forest2.com"
+
+HA NINCS trust:
+Minden forest külön-külön működik
+
+text
+
+## **Eredmény multiple forest setup után:**
+✅ Forest1 gépek → Forest1 + Forest2 resources (trust esetén)
+✅ Forest2 gépek → Forest1 + Forest2 resources
+✅ OnPremTGT: YES minden gépen
+✅ klist tgt → asktgt@FOREST1.COM + asktgt@FOREST2.COM
+
+text
+
+## **Összefoglaló:**
+MINDEN FOREST = KÜLÖN GPO:
+
+"Entra Seamless SSO - ForestX" → Enabled
+
+OU link: Workstations + DCs
+
+AZUREADSSOACC jogosultságok
+
+gpupdate /force MINDEN gépen
+
+Forest trust = IntraForestRoamingEnabled
+
+text
+
+**Ez oldja meg az OnPremTGT=NO hibát multiple forest környezetben!** Minden forest-nek kell saját Seamless SSO GPO-ja!
+Utánkövetések
+
+Hogyan linkeljem a Seamless SSO GPO-t multi-forest OU-khoz
+
+Mi a teendő ha eléri a 25600 char limitet a policy
+
+Update-AzureADSSOForest multi-tenant esetén hogyan
+
+Seamless SSO hibaelhárítás multi-forestben
+
+Milyen OU-hoz linkeljem a GPO-t first forestben
+
+Pro
+Elérted az ingyenes előnézet korlátját. Most alap keresést használsz.
+
+
+https://github.com/patlewis-MSFT/RemoveIntuneDevice/blob/master/RemoveIntuneDevice.ps1
