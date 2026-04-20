@@ -1,0 +1,152 @@
+Manually - Dryrun
+
+Import-Module Microsoft.Graph.Authentication
+Import-Module Microsoft.Graph.DeviceManagement
+
+Connect-MgGraph `
+    -Scopes "DeviceManagementManagedDevices.Read.All" `
+    -NoWelcome
+Intune-SingleDevice-ManualGuid-DryRun.ps1
+
+Write-Host ""
+$ManagedDeviceId = Read-Host "Enter Intune ManagedDeviceId (GUID)"
+
+if ($ManagedDeviceId -notmatch '^[0-9a-fA-F-]{36}$') {
+    Write-Host "Invalid GUID format." -ForegroundColor Red
+    return
+}
+
+$device = Get-MgDeviceManagementManagedDevice `
+    -ManagedDeviceId $ManagedDeviceId `
+    -ErrorAction SilentlyContinue
+
+if (-not $device) {
+    Write-Host "ManagedDeviceId not found in Intune." -ForegroundColor Red
+    return
+}
+
+Write-Host ""
+Write-Host "DRY-RUN – Intune device state" -ForegroundColor Cyan
+Write-Host "------------------------------------------------"
+Write-Host "DeviceName        : $($device.DeviceName)"
+Write-Host "ManagedDeviceId   : $($device.Id)"
+Write-Host "EnrollmentState   : $($device.EnrollmentState)"
+Write-Host "ManagementState   : $($device.ManagementState)"
+Write-Host "ComplianceState   : $($device.ComplianceState)"
+Write-Host "OwnerType         : $($device.OwnerType)"
+Write-Host "PrimaryUser       : $($device.UserPrincipalName)"
+Write-Host ""
+Write-Host "Planned action    : Retire + Delete (NOT EXECUTED)"
+Write-Host "------------------------------------------------"
+Write-Host "Dry-run complete. No changes were made." -ForegroundColor Green
+
+
+
+
+
+Intune-SingleDevice-ManualGuid-WhatIf.ps1
+
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+param()
+
+Import-Module Microsoft.Graph.Authentication
+Import-Module Microsoft.Graph.DeviceManagement
+
+Connect-MgGraph `
+    -Scopes @(
+        "DeviceManagementManagedDevices.PrivilegedOperations.All",
+        "DeviceManagementManagedDevices.ReadWrite.All"
+    ) `
+    -NoWelcome
+
+Write-Host ""
+$ManagedDeviceId = Read-Host "Enter Intune ManagedDeviceId (GUID)"
+
+if ($ManagedDeviceId -notmatch '^[0-9a-fA-F-]{36}$') {
+    Write-Host "Invalid GUID format." -ForegroundColor Red
+    return
+}
+
+$device = Get-MgDeviceManagementManagedDevice `
+    -ManagedDeviceId $ManagedDeviceId `
+    -ErrorAction SilentlyContinue
+
+if (-not $device) {
+    Write-Host "ManagedDeviceId not found in Intune." -ForegroundColor Red
+    return
+}
+
+$target = "Intune device $($device.DeviceName) [$ManagedDeviceId]"
+
+if ($PSCmdlet.ShouldProcess($target, "Retire and delete Intune managed device")) {
+
+    Invoke-MgRetireDeviceManagementManagedDevice `
+        -ManagedDeviceId $ManagedDeviceId `
+        -WhatIf:$WhatIfPreference `
+        -Confirm:$false
+
+    Remove-MgDeviceManagementManagedDevice `
+        -ManagedDeviceId $ManagedDeviceId `
+        -WhatIf:$WhatIfPreference `
+        -Confirm:$false
+}
+
+Write-Host ""
+Write-Host "WhatIf execution complete." -ForegroundColor Green
+
+.\Intune-SingleDevice-ManualGuid-WhatIf.ps1 -WhatIf
+
+
+Import-Module Microsoft.Graph.Authentication
+Import-Module Microsoft.Graph.DeviceManagement
+
+Connect-MgGraph `
+    -Scopes @(
+        "DeviceManagementManagedDevices.PrivilegedOperations.All",
+        "DeviceManagementManagedDevices.ReadWrite.All"
+    ) `
+    -NoWelcome
+
+Write-Host ""
+$ManagedDeviceId = Read-Host "Enter Intune ManagedDeviceId (GUID)"
+
+if ($ManagedDeviceId -notmatch '^[0-9a-fA-F-]{36}$') {
+    Write-Host "Invalid GUID format." -ForegroundColor Red
+    return
+}
+
+$device = Get-MgDeviceManagementManagedDevice `
+    -ManagedDeviceId $ManagedDeviceId `
+    -ErrorAction SilentlyContinue
+
+if (-not $device) {
+    Write-Host "ManagedDeviceId not found in Intune." -ForegroundColor Red
+    return
+}
+
+Write-Host ""
+Write-Host "CRITICAL WARNING" -ForegroundColor Red
+Write-Host "------------------------------------------------"
+Write-Host "DeviceName       : $($device.DeviceName)"
+Write-Host "ManagedDeviceId  : $ManagedDeviceId"
+Write-Host ""
+Write-Host "Action           : RETIRE + DELETE"
+Write-Host "Purpose          : Broken enrollment / co-management cleanup"
+Write-Host "------------------------------------------------"
+Write-Host ""
+
+$confirm = Read-Host "Type DELETE to proceed"
+
+if ($confirm -ne "DELETE") {
+    Write-Host "Operation cancelled." -ForegroundColor Yellow
+    return
+}
+
+Write-Host "Sending RETIRE command..." -ForegroundColor Cyan
+Invoke-MgRetireDeviceManagementManagedDevice -ManagedDeviceId $ManagedDeviceId
+
+Write-Host "Deleting Intune managed device..." -ForegroundColor Cyan
+Remove-MgDeviceManagementManagedDevice -ManagedDeviceId $ManagedDeviceId
+
+Write-Host ""
+Write-Host "Cleanup completed successfully." -ForegroundColor Green
